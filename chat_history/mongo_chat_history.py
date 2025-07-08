@@ -53,7 +53,6 @@ class MongoDBChatHistoryManager:
         if timestamp is None:
             timestamp = time.time()
         
-        # Create document
         document = {
             "_id": f"{session_id}_conv_{int(timestamp * 1000)}",
             "query": query,
@@ -65,7 +64,6 @@ class MongoDBChatHistoryManager:
         }
         
         try:
-            # Insert or replace if exists
             self.collection.replace_one(
                 {"_id": document["_id"]}, 
                 document, 
@@ -146,21 +144,18 @@ class MongoDBChatHistoryManager:
             query_words = conv['query'].lower().split()
             meaningful_words = [
                 w for w in query_words 
-                if len(w) > 3 and w not in ['what', 'when', 'where', 'why', 'how', 'can', 'will', 'would', 'could', 'should', 'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new', 'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use']
+                if len(w) > 2 and w not in ['what', 'when', 'where', 'why', 'how', 'can', 'will', 'would', 'could', 'should', 'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new', 'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use']
             ]
             if meaningful_words:
                 topics.extend(meaningful_words[:2])  
             
-            # Collect short user questions
             if len(conv['query']) < 100:
                 user_questions.append(conv['query'])
             
-            # Collect short responses that might contain key information
             if len(conv['response']) < 150:
                 key_responses.append(conv['response'])
         
-        # Create summary
-        unique_topics = list(dict.fromkeys(topics))[:10]  # Top 10 unique topics, preserving order
+        unique_topics = list(dict.fromkeys(topics))[:10]  
         
         summary_parts = []
         summary_parts.append(f"Earlier conversation summary ({len(conversations)} exchanges):")
@@ -169,17 +164,14 @@ class MongoDBChatHistoryManager:
             summary_parts.append(f"Key topics discussed: {', '.join(unique_topics)}")
         
         if user_questions:
-            # Include a few representative questions
             representative_questions = user_questions[:3]
             summary_parts.append(f"Example questions: {'; '.join(representative_questions)}")
         
         if key_responses:
-            # Include a few key short responses
             key_short_responses = [r for r in key_responses[:2]]
             if key_short_responses:
                 summary_parts.append(f"Key responses: {'; '.join(key_short_responses)}")
         
-        # Add time context
         start_time = datetime.fromtimestamp(conversations[0]['timestamp']).strftime("%H:%M")
         end_time = datetime.fromtimestamp(conversations[-1]['timestamp']).strftime("%H:%M")
         summary_parts.append(f"Time range: {start_time} - {end_time}")

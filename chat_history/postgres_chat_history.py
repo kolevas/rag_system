@@ -72,7 +72,6 @@ class PostgreSQLChatHistoryManager:
                                         max_tokens: int = 2000) -> List[Dict]:
         """Find most relevant conversations using PostgreSQL full-text search with fallback"""
         
-        # First try: Similarity search with full-text search
         search_sql = """
         WITH ranked_conversations AS (
             SELECT query, response,
@@ -96,7 +95,6 @@ class PostgreSQLChatHistoryManager:
                     cur.execute(search_sql, (current_query, session_id, current_query, n_results * 2))
                     results = cur.fetchall()
             
-            # If no full-text search results, fall back to recent conversations for context
             if not results:
                 print("No full-text search matches found. Checking recent conversations...")
                 results = self.get_recent_conversations(session_id, min(3, n_results), max_tokens)
@@ -105,7 +103,6 @@ class PostgreSQLChatHistoryManager:
             else:
                 print(f"Found {len(results)} conversations via full-text search")
             
-            # Filter by token budget
             conversations = []
             total_tokens = 0
             

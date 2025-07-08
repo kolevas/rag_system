@@ -41,7 +41,6 @@ class ChatHistoryManager:
         
         search_results = max(n_results * 3, 15) 
         
-        # First try: Semantic similarity search
         results = self.chat_collection.query(
             query_texts=[current_query],
             n_results=search_results,
@@ -66,26 +65,22 @@ class ChatHistoryManager:
                 else:
                     print(f"💡 Found conversation but relevance too low (distance: {distance:.3f}, threshold: {min_relevance})")
         
-        # If no relevant conversations found, fall back to recent conversations
         if not relevant_conversations:
             print("No semantic search matches found. Checking recent conversations...")
             try:
-                # Get recent conversations from the collection
                 all_results = self.chat_collection.get(where={"session_id": session_id})
                 
                 if all_results and all_results['documents']:
-                    # Sort by timestamp (most recent first)
                     recent_data = list(zip(all_results['documents'], all_results['metadatas']))
                     recent_data.sort(key=lambda x: x[1]['timestamp'], reverse=True)
                     
-                    # Take up to 3 most recent
                     for doc, metadata in recent_data[:min(3, n_results)]:
                         relevant_conversations.append({
                             'query': metadata['query'],
                             'response': metadata['response'],
                             'timestamp': metadata['timestamp'],
-                            'distance': 0.7,  # Neutral distance for fallback
-                            'similarity_score': 0.3,  # Lower score for fallback
+                            'distance': 0.7,  
+                            'similarity_score': 0.3, 
                             'combined_text': doc
                         })
                     
@@ -99,7 +94,6 @@ class ChatHistoryManager:
         else:
             print(f"Found {len(relevant_conversations)} conversations via semantic search")
         
-        # Filter by token budget
         from token_utils import count_tokens
         filtered_conversations = []
         total_tokens = 0
@@ -116,7 +110,6 @@ class ChatHistoryManager:
             if len(filtered_conversations) >= n_results:
                 break
         
-        # Sort by similarity score and recency
         filtered_conversations.sort(key=lambda x: (x['similarity_score'], x['timestamp']), reverse=True)
         
         print(f"Returning {len(filtered_conversations)} conversations ({total_tokens} tokens)")
