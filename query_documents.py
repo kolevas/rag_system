@@ -96,13 +96,12 @@ def chat(history_type="chroma"):
             n_results=30
         )
         
-        # Build context string up to token limit
-        max_total_tokens = 128000  # GPT-4o context window
-        max_response_tokens = 40000  # Increased for longer responses
-        prompt_overhead_tokens = 500  # Estimate for system/user prompt
+        max_total_tokens = 128000  
+        max_response_tokens = 40000
+        prompt_overhead_tokens = 500  
         available_tokens = max_total_tokens - max_response_tokens - prompt_overhead_tokens
-        context_token_budget = int(available_tokens * 0.8)  # 80% for document context
-        history_token_budget = available_tokens - context_token_budget  # 20% for history
+        context_token_budget = int(available_tokens * 0.8)  
+        history_token_budget = available_tokens - context_token_budget 
         
         context_chunks = []
         current_context_tokens = 0
@@ -115,13 +114,10 @@ def chat(history_type="chroma"):
         context_string = "\n".join(context_chunks)
         print(f"Document retrieval complete. Using {len(context_chunks)} chunks, {current_context_tokens} tokens for context.")
 
-        # Add relevant chat history to context if available (within history token budget)
         if relevant_history:
             if history_type.lower() == "mongo":
-                # For MongoDB, relevant_history is a summary string
                 history_text = f"\n\nConversation Summary:\n{relevant_history}"
             else:
-                # For other types, relevant_history is a list of conversations
                 history_text = f"\n\nRelevant previous conversation:\nQ: {relevant_history[0]['query']}\nA: {relevant_history[0]['response']}"
             
             history_tokens = count_tokens(history_text)
@@ -131,7 +127,6 @@ def chat(history_type="chroma"):
             else:
                 print(f"Skipped adding history: {history_tokens} tokens exceeds history budget of {history_token_budget}")
         
-        # Get user preference instructions
         preference_instructions = user_prefs.get_system_prompt_addition()
         
         if not context_string:
@@ -172,7 +167,6 @@ def chat(history_type="chroma"):
         response = completion.choices[0].message.content
         print(response)
         
-        # Save conversation to history
         print(f"Saving conversation to {history_type.upper()} history...")
         chat_manager.add_conversation(query=query, response=response, session_id=session_id)
         
