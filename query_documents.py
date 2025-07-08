@@ -7,9 +7,9 @@ from user_preferences import UserPreferences
 import time
 import uuid
 from token_utils import count_tokens
-
+from dotenv import load_dotenv
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
+load_dotenv()
 def chat(history_type="chroma"):
    
     reader = DocumentReader(chroma_db_path="./chroma_db")
