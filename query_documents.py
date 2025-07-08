@@ -73,7 +73,7 @@ def chat(history_type="chroma"):
         
         if history_type.lower() == "mongo":
             print(f"Searching for relevant conversation history...")
-            conversation_summary = chat_manager.get_conversation_summary(session_id=session_id)
+            conversation_summary = chat_manager.find_most_relevant_conversation(query, session_id=session_id, n_results=5, max_tokens=500)
             if conversation_summary and conversation_summary != "No conversations found for this session.":
                 print(f"Generated conversation summary: {conversation_summary[:100]}...")
                 relevant_history = conversation_summary  # Store as string for later use
