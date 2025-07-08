@@ -419,11 +419,8 @@ def preprocess_pdf(file, chunk_size: int = 1500, overlap: int = 200, blob_metada
     print("\nPreprocessing completed successfully!")
     print("Preprocessed document chunks:")
     return {
-        'result':{
-            'chunks': chunks,
-            'metadata': metadata
-        }
-        
+        'chunks': chunks,
+        'metadata': metadata
     }
 
 if __name__ == "__main__":
