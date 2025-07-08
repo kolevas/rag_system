@@ -180,4 +180,4 @@ def chat(history_type="chroma"):
         print("-" * 80)
 
 if __name__ == "__main__":
-    chat(history_type="mongo")
+    chat(history_type="mongo") # or chat(history_type="postgres") or chat(history_type="chroma")
