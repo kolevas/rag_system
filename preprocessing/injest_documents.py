@@ -1,0 +1,46 @@
+# ingest_documents.py
+
+from document_reader import DocumentReader
+from pathlib import Path
+import time
+
+if __name__ == "__main__":
+    reader = DocumentReader(chroma_db_path="./chroma_db")
+    unified_collection_name = "multimodal_downloaded_data_with_embedding"
+
+    base_data_dir = Path("/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal")
+
+    dir = Path("/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal")
+    for file_path in base_data_dir.iterdir():
+        if file_path.is_file(): 
+            file_extension = file_path.suffix.lower()
+             
+        docs = reader.read_single_document(
+            file_path=str(file_path)
+        )
+        
+        if docs:
+            start_time = time.time()
+            reader.add_documents_to_collection(docs, collection_name=unified_collection_name)
+            print(f"Successfully added {len(docs)} documents from {file_path.name} to '{unified_collection_name}'.")
+            print(docs)
+
+            end_time = time.time()
+            actual_processing_time = end_time - start_time
+            print(actual_processing_time)
+        else:
+            print(f"No documents generated for file: {file_path.name}.")
+    
+
+            # reader.add_documents_to_collection([doc], collection_name="multimodal_downloaded_data_with_embedding")
+    # doc = reader.read_single_document("/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal/iris.csv")
+    # if doc:
+    #     reader.add_documents_to_collection([doc], collection_name="multimodal_downloaded_data_with_embedding")
+
+    # Option 2: Process an entire directory
+    # reader.process_directory(
+    #     directory_path="/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal",
+    #     collection_name="multimodal_downloaded_data_with_embedding",
+    #     recursive=True,
+    #     chunk_size=500
+    # )
