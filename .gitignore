@@ -1,5 +1,7 @@
 # ChromaDB database files
 chroma_db/
+cosmos_chat_history.py
+settings.json
 
 # Python cache files
 __pycache__/
@@ -113,3 +115,4 @@ dmypy.json
 
 # macOS
 .DS_Store
+
