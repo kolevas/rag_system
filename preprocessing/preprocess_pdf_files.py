@@ -169,7 +169,6 @@ def extract_ordered_content_to_text(file) -> str:
             
     return full_text_content.strip()
 
-
 def clean_text(text: str) -> str:
     """
     Clean and normalize text by removing extra whitespace, special characters,
@@ -330,8 +329,6 @@ def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200
     print(f"Text splitting completed. Total chunks: {len(chunks)}")
     return chunks
 
-# Helper function for original chunking logic
-
 def _original_chunking(text: str, chunk_size: int, overlap: int) -> List[str]:
     chunks = []
     text_length = len(text)
@@ -391,6 +388,66 @@ def _original_chunking(text: str, chunk_size: int, overlap: int) -> List[str]:
         start = end - current_overlap
     return chunks
 
+def normalize_chunk(chunk: str) -> str:
+    normalized_response = re.sub(r"\[\[\d+\]\],?\s*", "", chunk)
+    normalized_response = re.sub(r"\n\s*#{1,6}\s*([^\n]+)", r". \1:", normalized_response)
+    normalized_response = re.sub(r"\n\s*-\s*\*\*([^*]+)\*\*:\s*", r". \1: ", normalized_response)
+    normalized_response = re.sub(r"\n\s*-\s*", ". ", normalized_response)
+    normalized_response = re.sub(r"\*\*([^*]+)\*\*", r"\1", normalized_response)
+    normalized_response = re.sub(r"\*([^*]+)\*", r"\1", normalized_response)
+    normalized_response = re.sub(r"\n{3,}", "\n\n", normalized_response)
+    normalized_response = re.sub(r"\n\n", ". ", normalized_response)
+    normalized_response = re.sub(r"\n", " ", normalized_response)
+    # NEW: Handle hyphenated words broken across lines
+    normalized_response = re.sub(r"(\w)-\s+(\w)", r"\1\2", normalized_response)
+    
+    # NEW: Remove extra hyphens and normalize dashes
+    normalized_response = re.sub(r"--+", "—", normalized_response)
+    
+    # NEW: Fix common PDF extraction artifacts
+    normalized_response = re.sub(r"\s*\|\s*", " ", normalized_response)  # Remove table separators
+    normalized_response = re.sub(r"(\w)\s*_\s*(\w)", r"\1_\2", normalized_response)  # Fix broken underscores
+    
+    # NEW: Handle page numbers and headers/footers patterns
+    normalized_response = re.sub(r"\b(Page\s+\d+|©\s*\d+|All rights reserved)\b", "", normalized_response, flags=re.IGNORECASE)
+    
+    # NEW: Fix spacing around parentheses and brackets
+    normalized_response = re.sub(r"\s*\(\s*", " (", normalized_response)
+    normalized_response = re.sub(r"\s*\)\s*", ") ", normalized_response)
+    normalized_response = re.sub(r"\s*\[\s*", " [", normalized_response)
+    normalized_response = re.sub(r"\s*\]\s*", "] ", normalized_response)
+    
+    # ...existing code...
+    normalized_response = re.sub(r"\.+", ".", normalized_response)
+    normalized_response = re.sub(r"\s*\.\s*\.", ".", normalized_response)
+    normalized_response = re.sub(r":\s*\.", ":", normalized_response)
+    normalized_response = re.sub(r"\.\s*:", ":", normalized_response)
+    
+    # NEW: Clean up multiple punctuation marks
+    normalized_response = re.sub(r"[.]{2,}", ".", normalized_response)
+    normalized_response = re.sub(r"[,]{2,}", ",", normalized_response)
+    
+    normalized_response = re.sub(r"\s+", " ", normalized_response)
+    normalized_response = re.sub(r"\s*([.,:;!?])", r"\1", normalized_response)
+    normalized_response = re.sub(r"([.,:;!?])\s*", r"\1 ", normalized_response)
+    
+    # NEW: Fix spacing before opening quotes and after closing quotes
+    normalized_response = re.sub(r'\s*"([^"]*)"\s*', r' "\1" ', normalized_response)
+    normalized_response = re.sub(r"\s*'([^']*)'\s*", r" '\1' ", normalized_response)
+    
+    normalized_response = re.sub(r"\.\s*([a-z])", lambda m: ". " + m.group(1).upper(), normalized_response)
+    normalized_response = re.sub(r"(\d+)\.\s+(\d+)", r"\1.\2", normalized_response)
+    
+    # NEW: Final cleanup - remove any remaining double spaces
+    normalized_response = re.sub(r"\s{2,}", " ", normalized_response)
+    
+    normalized_response = normalized_response.strip()
+    if normalized_response and not normalized_response[0].isupper():
+        normalized_response = normalized_response[0].upper() + normalized_response[1:]
+    if normalized_response and normalized_response[-1] not in '.!?':
+        normalized_response += "."
+    return normalized_response
+
 def preprocess_pdf(file, chunk_size: int = 1500, overlap: int = 200, blob_metadata=None) -> Dict[str, List[str]]:
     """
     Main preprocessing function that handles the entire PDF preprocessing pipeline.
@@ -403,6 +460,9 @@ def preprocess_pdf(file, chunk_size: int = 1500, overlap: int = 200, blob_metada
     
     print("\nStep 2: Splitting into chunks")
     chunks = split_text_into_chunks(content_text, chunk_size, overlap)
+    for chunk in chunks:
+        chunk = normalize_chunk(chunk)
+        print(f"Normalized chunk: {chunk}")
     print(f"Chunk length for file {file['name']} = {len(chunks)}")
     
     # Prepare metadata
@@ -419,14 +479,17 @@ def preprocess_pdf(file, chunk_size: int = 1500, overlap: int = 200, blob_metada
     print("\nPreprocessing completed successfully!")
     print("Preprocessed document chunks:")
     return {
-        'chunks': chunks,
-        'metadata': metadata
+        'result':{
+            'chunks': chunks,
+            'metadata': metadata
+        }
+        
     }
 
 if __name__ == "__main__":
     # Example usage
     try:
-        doc_path = r"/Users/snezhanakoleva/praksa/local_document_preprocessing/test_data/mixed_content_example.pdf"
+        doc_path = r"/Users/snezhanakoleva/praksa/local_document_preprocessing/test_data/Onculitis Real-World Evidence and Long-Term Safety Monitoring Advisory Board.pdf"
         print("\n=== Starting PDF Processing ===")
         start_time = time.time()
         
@@ -443,11 +506,10 @@ if __name__ == "__main__":
         print(f"Total characters: {result['result']['metadata']['total_chars']}")
         print(f"Processing time: {time.time() - start_time:.2f} seconds")
         # Print first chunk as example
-        if result['result']['chunks']:
-            for chunk in result['result']['chunks']:
-                print(f"\nChunk:\n{chunk}\n")
+        # if result['result']['chunks']:
+        #     for chunk in result['result']['chunks']:
+        #         print(f"\nChunk:\n{chunk}\n")
 
             
     except Exception as e:
         print(f"\nError processing PDF: {str(e)}")
-
