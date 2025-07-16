@@ -146,9 +146,10 @@ class MongoDBChatHistoryManager:
         context_parts = []
         for conv in conversations:
             if conv.get('is_summary'):
-                context_parts.append(f"[SUMMARY] {conv['response']}")
+                context_parts.append(f"[SUMMARY] {conv.get('response', conv.get('summary', ''))}")
             else:
-                context_parts.append(f"Question: {conv['query']}\nAnswer: {conv['response']}")
+                # Use summary since that's what we have in the hybrid conversations
+                context_parts.append(f"[CONVERSATION] {conv.get('summary', '')}")
         
         return "\n".join(context_parts)
 

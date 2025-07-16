@@ -620,3 +620,73 @@ class DocumentReader:
         except Exception as e:
             print(f"Error getting document categories: {e}")
             return {}
+    
+    def get_document_content(self, query: str, collection_name: str = "my_documents", n_results: int = 4, 
+                            enable_reranking: bool = True, document_type_filter: str = None) -> List[str]:
+        """
+        Get just the document content without formatting - for use in chat systems.
+        
+        Args:
+            query: The search query
+            collection_name: Name of the collection to search
+            n_results: Number of results to return
+            enable_reranking: Whether to apply re-ranking based on query-document category matching
+            document_type_filter: Optional filter to restrict search to specific document types
+            
+        Returns:
+            List of document content strings
+        """
+        try:
+            collection = self.client.get_collection(name=collection_name, embedding_function=self.default_embedding_function)
+        except Exception as e:
+            error_message = f"Collection not found: {collection_name}. Error: {e}"
+            print(error_message)
+            return [error_message]  # Return error as list for consistency
+
+        # Classify the query to understand user intent
+        query_category = self.classifier.classify_query(query)
+        print(f"Query classified as: {query_category}")
+        
+        # Determine document type filter
+        if document_type_filter is None and query_category != 'unknown':
+            document_type_filter = query_category
+        
+        # Build where clause for filtering
+        where_clause = {}
+        if document_type_filter:
+            where_clause['document_category'] = document_type_filter
+            print(f"Filtering by document category: {document_type_filter}")
+        
+        # Perform the search with filtering
+        search_params = {
+            'query_texts': [query],
+            'n_results': n_results * 2 if enable_reranking else n_results  # Get more results for re-ranking
+        }
+        
+        if where_clause:
+            search_params['where'] = where_clause
+        
+        try:
+            results = collection.query(**search_params)
+        except Exception as e:
+            print(f"Query failed with filter, trying without filter: {e}")
+            # Fallback to unfiltered search
+            results = collection.query(
+                query_texts=[query],
+                n_results=n_results * 2 if enable_reranking else n_results
+            )
+        
+        # Apply re-ranking if enabled
+        if enable_reranking and results and results['documents'] and results['documents'][0]:
+            results = self._rerank_results(results, query, query_category)
+            # Trim to desired number of results
+            if len(results['documents'][0]) > n_results:
+                for key in results:
+                    if isinstance(results[key], list) and len(results[key]) > 0:
+                        results[key][0] = results[key][0][:n_results]
+
+        # Return just the document content
+        if results and results['documents'] and results['documents'][0]:
+            return results['documents'][0]
+        else:
+            return [f"No results found for query: {query}"]

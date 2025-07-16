@@ -48,7 +48,7 @@ class DocumentChatBot:
     
     def _get_document_context(self, query: str, max_chunks: int = 10) -> str:
         """Retrieve document context with a reasonable chunk limit."""
-        retrieved_content = self.reader.query_documents(
+        retrieved_content = self.reader.get_document_content(
             query=query,
             collection_name="multimodal_downloaded_data_with_embedding",
             n_results=13
