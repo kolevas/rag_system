@@ -8,9 +8,9 @@ if __name__ == "__main__":
     reader = DocumentReader(chroma_db_path="./chroma_db")
     unified_collection_name = "multimodal_downloaded_data_with_embedding"
 
-    base_data_dir = Path("/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal")
+    base_data_dir = Path("/Users/snezhanakoleva/praksa/learn/chroma_db_project/test_data_multimodal")
 
-    dir = Path("/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal")
+    dir = Path("/Users/snezhanakoleva/praksa/learn/chroma_db_project/test_data_multimodal")
     for file_path in base_data_dir.iterdir():
         if file_path.is_file(): 
             file_extension = file_path.suffix.lower()

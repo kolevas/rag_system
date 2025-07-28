@@ -174,34 +174,16 @@ def clean_text(text: str) -> str:
     Clean and normalize text by removing extra whitespace, special characters,
     and normalizing unicode characters. Preserves table formatting.
     """
-    # print("Starting text cleaning...")
-    
-    # Split text into table and non-table parts
     parts = text.split("\nTable Content:")
     cleaned_parts = []
-    
-    # Clean the first part (non-table content)
     if parts[0].strip():
-        # print("Cleaning non-table content...")
-        # Normalize unicode characters
         cleaned = unicodedata.normalize('NFKD', parts[0])
-        # print("Unicode normalization completed")
-        
-        # Remove special characters but keep basic punctuation
         cleaned = re.sub(r'[^\w\s.,!?-]', ' ', cleaned)
-        # print("Special characters removed")
-        
-        # Remove extra whitespace
         cleaned = re.sub(r'\s+', ' ', cleaned)
-        # print("Extra whitespace removed")
-        
         cleaned_parts.append(cleaned.strip())
     
-    # Process remaining parts (tables)
     for part in parts[1:]:
         if part.strip():
-            # print("Preserving table content...")
-            # Add back the "Table Content:" marker
             cleaned_parts.append("\nTable Content:" + part)
     
     return '\n'.join(cleaned_parts)

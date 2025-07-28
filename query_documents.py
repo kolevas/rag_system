@@ -1,42 +1,38 @@
-import os
-import uuid
-import hashlib
-from typing import Optional
 from openai import AzureOpenAI
-from preprocessing.document_reader import DocumentReader 
-from chat_history.mongo_chat_history import MongoDBChatHistoryManager
-from token_utils import count_tokens
-from dotenv import load_dotenv
+from preprocessing.document_reader import DocumentReader
+import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-load_dotenv()
 
 class DocumentChatBot:
-    """Simplified document chat bot with MongoDB storage backend."""
-    
-    def __init__(self, entra_oid="default_user", mongo_uri=None, db_name="chat_history_db", 
-                 collection_name="conversations"):
-        self.entra_oid = entra_oid
-        
-        # Model configuration
-        self.model_name = "gpt-4o"
-        self.max_context_tokens = 20000    # GPT-4o context window decreased for demonstration purposes
-        self.max_response_tokens = 4000    # Reserve tokens for response
-        self.safety_buffer = 500           # Safety buffer for token counting variations
-        
-        # Generate session ID
-        session_base = f"{entra_oid}_{uuid.uuid4().hex[:8]}"
-        self.session_id = hashlib.md5(session_base.encode()).hexdigest()[:24]
-        
-        # Initialize components
-        print("Using MONGODB for chat history storage")
+
+    def __init__(self, user_id="default_user"):
+        self.user_id = user_id
+        self.project_id = "1"
         self.reader = DocumentReader(chroma_db_path="./chroma_db")
-        self.chat_manager = MongoDBChatHistoryManager(
-            mongo_uri=mongo_uri,
-            db_name=db_name,
-            collection_name=collection_name
+        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
+        self.session_id = self._initialize_session()
+        self.client = AzureOpenAI(
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION")
         )
-        
-        self.client = self._initialize_openai_client()
+
+    def _initialize_session(self):
+        # Use chat_manager to create or get a session (MongoDB only)
+        sessions = self.chat_manager.get_sessions(self.user_id, self.project_id)
+        if sessions:
+            return sessions[-1]["session_id"]  # Use the most recent session
+        else:
+            session = self.chat_manager.create_session(self.user_id, self.project_id)
+            return session["session_id"]
+
+    def _initialize_chat_manager(self):
+        """Initialize the MongoDB chat history manager only."""
+        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        return MongoDBChatHistoryManager(
+            db_name="chat_history_db", collection_name="conversations"
+        )
     
     def _initialize_openai_client(self):
         """Initialize Azure OpenAI client."""
@@ -46,159 +42,168 @@ class DocumentChatBot:
             api_version=os.getenv("AZURE_OPENAI_API_VERSION")
         )
     
-    def _get_document_context(self, query: str, max_chunks: int = 10) -> str:
-        """Retrieve document context with a reasonable chunk limit."""
-        retrieved_content = self.reader.get_document_content(
-            query=query,
-            collection_name="multimodal_downloaded_data_with_embedding",
-            n_results=13
-        ) 
+    def get_sessions(self):
+        """Return all sessions for the current user as a list of dicts."""
+        try:
+            sessions = self.chat_manager.get_sessions(self.user_id, self.project_id)
+            return sessions if sessions else []
+        except Exception as e:
+            print(f"Error retrieving sessions: {e}")
+            return []
 
-        context_parts = retrieved_content[:max_chunks]
-        context_string = "\n".join(context_parts)
-        return context_string
-    
-    def _calculate_remaining_tokens_for_history(self, query: str, context_string: str) -> int:
-        """Calculate how many tokens remain for conversation history after allocating for documents."""
-        
-        query_tokens = count_tokens(query)
-        base_system_with_context = self._build_system_message(context_string, "")
-        system_tokens = count_tokens(base_system_with_context)
-        used_tokens = query_tokens + system_tokens + self.max_response_tokens + self.safety_buffer
-        remaining_tokens = self.max_context_tokens - used_tokens
-        history_tokens = max(remaining_tokens, 200)  
-        
-        print(f"🔢 Used={used_tokens}, Remaining_for_history={history_tokens}")
-        
-        return history_tokens
-
-    def _get_conversation_history(self, query: str, available_history_tokens: int) -> Optional[str]:
-        """Get relevant conversation history from MongoDB within token limit."""
+    def _get_conversation_history(self, query: str):
+        """Get relevant conversation history based on storage type."""
+        print("Searching for relevant conversation history...")
         relevant_history = self.chat_manager.find_most_relevant_conversation(
-            query, session_id=self.session_id, n_results=5, max_tokens=available_history_tokens
+            query, session_id=self.session_id, n_results=5, max_tokens=500
         )
         if relevant_history:
-            actual_tokens = count_tokens(relevant_history)
-            print(f"📊 Retrieved conversation history ({actual_tokens} tokens)")
+            if isinstance(relevant_history, list):
+                conversation_count = len(relevant_history)
+                return relevant_history[0] if relevant_history else None
+            else:
+                conversation_count = relevant_history.count("Question:")
+                if conversation_count == 0:
+                    conversation_count = 1  # Assume at least one conversation if content exists
+            
+            print(f"📊 Retrieved {conversation_count} relevant conversation(s)")
             return relevant_history
         else:
-            print("📊 No conversation history found")
+            print("📊 No relevant conversation history found")
             return None
-
+    
+    def _get_document_context(self, query: str) -> str:
+        """Retrieve and process document context."""
+        print(f"Retrieving documents...")
+        retrieved_content = self.reader.query_documents(
+            query=query,
+            collection_name="multimodal_downloaded_data_with_embedding",
+            n_results=20
+        )
+        
+        context_string = "\n".join(retrieved_content[:10])  # Use top 10 chunks
+        print(f"Using {len(retrieved_content[:10])} document chunks")
+        return context_string
+    
     def _build_system_message(self, context_string: str, history_text: str = "") -> str:
         """Build the system message for the LLM."""
-        base_prompt = """You are a knowledgeable AI assistant that can answer questions about literature and economics. 
+        
+        return f"""You are a knowledgeable AI assistant that can answer questions about literature, science, and various other topics. 
                 When answering:
-                - Use ONLY the provided context to give accurate, detailed responses
+                - Use the provided context to give accurate, detailed responses. Be specific and informative in your responses
                 - If previous conversation history is available, reference it when relevant
-                - Be specific and informative in your responses
-                - Use ONLY the provided context and conversation history to answer questions. If you don't know the answer state that."""
-        
-        full_context = context_string + history_text
-        
-        return f"""{base_prompt}
-                
-                Context and Previous Conversations:
-                {full_context}"""
-    
+                - Use ONLY the provided context and conversation history to answer questions. If you don't know the answer state that.
+                - Generate follow-up question suggestions after each response to keep the conversation going
+                - Your responses should look like this:
+                ```json
+                {{
+                    "response": "Your answer here",
+                    "follow_up_questions": [
+                        "Follow-up question 1",
+                        "Follow-up question 2",
+                        "Follow-up question 3"
+                    ]
+                }}
+                ```
+                - Stick to the provided guideline and format
+                - If the question is vague or ambiguous, ask for clarification
+                Context:
+                {context_string}
+                History:
+                {history_text}
+                If by any chance you find conflicting information in the context, use the most recent information to answer the question."""
+
+    def _improve_query(self, query: str, is_interactive: bool = False) -> str:
+        prompt = (
+            "Rewrite the following question to be as clear, specific, and context-rich as possible for a document retrieval system. "
+            "Do not answer the question, just rewrite it.\n"
+            f"Original: {query}\nImproved:"
+        )
+        # user da izbere dali saka da go prasa negovoto prsanje ili podobrenoto
+        try:
+            completion = self.client.chat.completions.create(
+                model="gpt-35-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an assistant that is a part of a RAG system. Your task is to rewrite vague or ambiguous questions to be more specific and helpful for document search."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=60,
+            )
+            improved = completion.choices[0].message.content.strip()
+            if improved and improved.lower() != query.lower():
+                print(f"Improved query: {improved}")
+                if is_interactive:
+                    print("Would you like to use this improved query? (yes/no)")
+                    user_choice = input().strip().lower()
+                    if user_choice in ['yes', 'y']: 
+                        return improved
+                    return query  # Use original query if user declines
+                else:
+                    return improved
+        except Exception:
+            pass
+        return query
+
     def _generate_response(self, query: str, system_message: str) -> str:
-        """Generate response using Azure OpenAI with calculated token limits."""
-        
+        """Generate response using Azure OpenAI."""
+        print("Generating response...")
+        improved_query = self._improve_query(query)  
         completion = self.client.chat.completions.create(
-            model=self.model_name,
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": query}
+                {"role": "user", "content": improved_query} #improved_query
             ],
             temperature=0.6,
-            max_tokens=self.max_response_tokens,
+            max_tokens=4000,
         )
         return completion.choices[0].message.content
     
     def _save_conversation(self, query: str, response: str):
-        """Save conversation to MongoDB chat history."""
+        """Save conversation to chat history."""
+        print("Saving conversation...")
         self.chat_manager.add_conversation(
             query=query, response=response, session_id=self.session_id
         )
     
-    def process_query(self, query: str) -> str:
-        """
-        Process a single query with intelligent token management.
-        
-        Flow:
-        1. Retrieve document context first (top N chunks)
-        2. Calculate remaining tokens for history based on actual document usage
-        3. Retrieve conversation history with the calculated token limit
-        4. Generate response with all context
-        """
-        try:
-            print(f"🔍 Processing: '{query}'")
-            
-            context_string = self._get_document_context(query, max_chunks=10)
-            history_tokens = self._calculate_remaining_tokens_for_history(query, context_string)
-            relevant_history = self._get_conversation_history(query, history_tokens)
-            history_text = ""
-            if relevant_history:
-                history_text = f"\n\nRelevant Previous Conversations:\n{relevant_history}"
-            system_message = self._build_system_message(context_string, history_text)
-            response = self._generate_response(query, system_message)
-            self._save_conversation(query, response)
-            
-            return response
-            
-        except Exception as e:
-            error_msg = f"Error processing query: {e}"
-            print(error_msg)
-            return error_msg
-
-    def cleanup_session(self):
-        """Clean up the current session."""
-        if hasattr(self.chat_manager, 'close'):
-            self.chat_manager.close()
-        print("Session cleaned up")
-    
     def chat_loop(self):
         """Main chat interaction loop."""
         print(f"Document Chat Bot initialized!")
-        print(f"Storage: MONGODB")
-        print(f"Model: {self.model_name} (Context: {self.max_context_tokens:,} tokens)")
+        print(f"Storage: MongoDB")
         print("Commands: 'quit'")
         print("-" * 60)
-        
         try:
             while True:
                 query = input("\nEnter your question (or command): ").strip()
                 if not query:
                     continue
-                
                 try:
-                    response = self.process_query(query)
+                    print(f"\n🔍 Processing: '{query}'")
+                    # Get conversation history and document context
+                    relevant_history = self._get_conversation_history(query)
+                    context_string = self._get_document_context(query)
+                    # Prepare context for LLM
+                    history_text = ""
+                    if relevant_history:
+                        history_text = f"\n\nRelevant Context:\n{relevant_history}"
+                    # Generate and display response
+                    system_message = self._build_system_message(context_string, history_text)
+                    response = self._generate_response(query, system_message)
                     print("\nResponse:")
                     print(response)
+                    # Save conversation
+                    self._save_conversation(query, response)
                     print("-" * 60)
-                    
                 except Exception as e:
                     print(f"Error: {e}")
                     print("Please try again.")
-        
         except KeyboardInterrupt:
             print("\n\nSession interrupted by user")
-            self.cleanup_session()
         except EOFError:
             print("\n\nSession ended")
-            self.cleanup_session()
-
 
 if __name__ == "__main__":
-    # Simple usage examples:
-    # Default: chat()
-    # Custom user: chat("user_123")
-    # Custom MongoDB: chat("user_123", "mongodb://localhost:27017", "my_chat_db", "my_conversations")
     
-    bot = DocumentChatBot(
-        entra_oid="test_user_12345",
-        mongo_uri=None,  
-        db_name="chat_history_db",
-        collection_name="conversations"
-    )
+    bot = DocumentChatBot(user_id="6175")
     bot.chat_loop()

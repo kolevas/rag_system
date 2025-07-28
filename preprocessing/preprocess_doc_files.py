@@ -11,41 +11,20 @@ from pathlib import Path
 import io
 
 
-# Endnotes, headers, footers, non-body parts not included in the processing
-
 def clean_text(text: str) -> str:
     """
     Clean and normalize text by removing extra whitespace, special characters,
     and normalizing unicode characters. Preserves table formatting.
     """
-    # print("Starting text cleaning...")
-    
-    # Split text into table and non-table parts
     parts = text.split("\nTable Content:")
     cleaned_parts = []
-    
-    # Clean the first part (non-table content)
     if parts[0].strip():
-        # print("Cleaning non-table content...")
-        # Normalize unicode characters
         cleaned = unicodedata.normalize('NFKD', parts[0])
-        # print("Unicode normalization completed")
-        
-        # Remove special characters but keep basic punctuation
         cleaned = re.sub(r'[^\w\s.,!?-]', ' ', cleaned)
-        # print("Special characters removed")
-        
-        # Remove extra whitespace
         cleaned = re.sub(r'\s+', ' ', cleaned)
-        # print("Extra whitespace removed")
-        
         cleaned_parts.append(cleaned.strip())
-    
-    # Process remaining parts (tables)
     for part in parts[1:]:
         if part.strip():
-            # print("Preserving table content...")
-            # Add back the "Table Content:" marker
             cleaned_parts.append( part)
     
     return '\n'.join(cleaned_parts)
@@ -122,7 +101,6 @@ def extract_text_from_docx(file) -> List[Tuple[str, str]]:
     except Exception as e:
         # print(f"\nError during document processing: {str(e)}")
         raise Exception(f"Error extracting text from document: {str(e)}")
-
 
 def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
     """
@@ -260,8 +238,6 @@ def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200
     print(f"Text splitting completed. Total chunks: {len(chunks)}")
     return chunks
 
-# Helper function for original chunking logic
-
 def _original_chunking(text: str, chunk_size: int, overlap: int) -> List[str]:
     chunks = []
     text_length = len(text)
@@ -320,7 +296,6 @@ def _original_chunking(text: str, chunk_size: int, overlap: int) -> List[str]:
             print(f"No strategic overlap point found. Using default/clamped overlap: {current_overlap}")
         start = end - current_overlap
     return chunks
-
 
 def preprocess_doc(file = {}, chunk_size: int = 1000, overlap: int = 200, blob_metadata = None) -> Dict[str, List[str]]:
     """
@@ -382,7 +357,6 @@ def preprocess_doc(file = {}, chunk_size: int = 1000, overlap: int = 200, blob_m
             'metadata': metadata
         }
     }
-
 
 def normalize_chunk(chunk: str) -> str:
     """
@@ -449,13 +423,11 @@ def normalize_chunk(chunk: str) -> str:
     return normalized_response
 
 if __name__ == "__main__":
-    # Example usage
     try:
         start_time = time.time()
         doc_path = r"test_data/sample.docx"
         print("\n=== Starting Document Processing ===")
         
-        # Read the file and create the expected dictionary format
         with open(doc_path, 'rb') as f:
             file_content = f.read()
         
@@ -468,7 +440,6 @@ if __name__ == "__main__":
         print(f"Total characters: {result['result']['metadata']['total_chars']}")
         print(f"Processing time: {time.time() - start_time:.2f} seconds")
         
-        # Print first chunk as example
         if result['result']['chunks']:
             print(f"\nFirst chunk example:\n{result['result']['chunks'][0]}\n")
             

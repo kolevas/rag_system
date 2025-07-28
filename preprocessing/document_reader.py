@@ -261,7 +261,7 @@ class DocumentReader:
         if not documents:
             print(f"No documents provided to add to collection '{collection_name}'.")
             return
-
+        print("Checkpoint 1")
         collection = self.create_or_get_collection(collection_name)
         total_added_count = 0
 
@@ -690,3 +690,18 @@ class DocumentReader:
             return results['documents'][0]
         else:
             return [f"No results found for query: {query}"]
+
+
+# VectorStoreIndex + ChromaDB integration code example:
+    # from llama_index.vector_stores.chroma import ChromaVectorStore
+    # from llama_index import VectorStoreIndex
+    # from chromadb import PersistentClient
+    # chroma_client = PersistentClient(path="./chroma_db")
+    # vector_store = ChromaVectorStore(chroma_client=chroma_client, collection_name="my_collection")
+    # index = VectorStoreIndex.from_vector_store(vector_store)
+
+# SimpleDirectoryReader: reads documents from a directory and processes them into chunks (like scan_directory + read_single_document)
+
+# IngestionPipeline with custom transformations: orchestrator for the document ingestion process
+
+# SimilarityPostprocessor: postprocessing hybrid search, reranking, and postprocessing (e.g., similarity postprocessors, response synthesizers)
