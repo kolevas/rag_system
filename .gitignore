@@ -116,3 +116,5 @@ dmypy.json
 # macOS
 .DS_Store
 
+
+test_data_multimodal/
