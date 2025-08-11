@@ -1,5 +1,6 @@
 import streamlit as st
-from query_documents import DocumentChatBot
+from vanilla_engine import DocumentChatBot
+from llamaindex_engine import LlamaIndexManager
 import json
 import re
 
@@ -28,7 +29,7 @@ def parse_bot_response(response_text):
         print(f"Error parsing bot response: {e}")
         return response_text, []
 
-def display_message(role, content, follow_up_questions=None, msg_idx=None):
+def display_message(role, content, follow_up_questions=None, msg_idx=None, engine_type="document"):
     """Display a chat message with proper formatting"""
     if role == "user":
         st.markdown(f"""
@@ -65,18 +66,26 @@ def display_message(role, content, follow_up_questions=None, msg_idx=None):
             st.markdown("---")
     return None
 
-def fetch_user_conversations(user_id):
+def fetch_user_conversations(user_id, chatbot_type="document"):
     """Fetch all sessions for the user and their messages"""
     try:
-        bot = DocumentChatBot(user_id=user_id)
-        sessions = bot.get_sessions()
+        if chatbot_type == "llamaindex":
+            bot = LlamaIndexManager(user_id=user_id)
+            sessions = bot.get_sessions()
+        else:
+            bot = DocumentChatBot(user_id=user_id)
+            sessions = bot.get_sessions()
+            
         conversations = []
 
         for session in sessions:
             session_id = session['session_id']
             try:
                 # Get all messages for this session
-                messages = bot.chat_manager.get_conversation(session_id=session_id)
+                if chatbot_type == "llamaindex":
+                    messages = bot.chat_manager.get_conversation(session_id=session_id)
+                else:
+                    messages = bot.chat_manager.get_conversation(session_id=session_id)
                 
                 # Create a meaningful title from the first user message if available
                 title = session.get('title', f"Session {session_id[:8]}")
@@ -111,15 +120,43 @@ def fetch_user_conversations(user_id):
         print(f"Error fetching user conversations: {e}")
         return []
 
+def create_chatbot_instance(user_id, chatbot_type="document"):
+    """Create appropriate chatbot instance based on type"""
+    if chatbot_type == "llamaindex":
+        bot = LlamaIndexManager(user_id=user_id)
+        # Build index if needed
+        if not bot.has_existing_index():
+            print("⚠️ No existing LlamaIndex found. You may need to build the index first.")
+        else:
+            bot.build_index()
+        return bot
+    else:
+        return DocumentChatBot(user_id=user_id)
+
+def query_chatbot(chatbot, user_input, chatbot_type="document"):
+    """Unified interface to query either chatbot type"""
+    if chatbot_type == "llamaindex":
+        # LlamaIndex interface
+        return chatbot.query(user_input)
+    else:
+        # DocumentChatBot interface
+        relevant_history = chatbot._get_conversation_history(user_input)
+        context_string = chatbot._get_document_context(user_input)
+        history_text = f"\n\nRelevant Context:\n{relevant_history}" if relevant_history else ""
+        system_message = chatbot._build_system_message(context_string, history_text)
+        return chatbot._generate_response(user_input, system_message)
+
 # Initialize session state variables
 if 'user_id' not in st.session_state:
     st.session_state['user_id'] = "default_user"
+if 'chatbot_type' not in st.session_state:
+    st.session_state['chatbot_type'] = "document"
 if 'messages' not in st.session_state:
     st.session_state['messages'] = []
 if 'active_conv' not in st.session_state:
     st.session_state['active_conv'] = None
 if 'chatbot' not in st.session_state:
-    st.session_state['chatbot'] = DocumentChatBot(user_id=st.session_state['user_id'])
+    st.session_state['chatbot'] = create_chatbot_instance(st.session_state['user_id'], st.session_state['chatbot_type'])
 if 'conversations' not in st.session_state:
     st.session_state['conversations'] = []
 if 'pending_followup' not in st.session_state:
@@ -133,7 +170,7 @@ with left_col:
     st.markdown("## Previous Conversations")
     
     # Refresh conversations for the current user
-    st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'])
+    st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
     
     # Display message if no conversations found
     if not st.session_state['conversations']:
@@ -172,7 +209,7 @@ with left_col:
         st.session_state['active_conv'] = None
         
         # Refresh conversations list
-        st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'])
+        st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
         
         # Force a rerun to update the display
         st.rerun()
@@ -181,22 +218,68 @@ with left_col:
 with right_col:
     st.markdown("## ChatBot Settings")
     
+    # Chatbot Type Selection
+    st.markdown("### Chatbot Engine")
+    chatbot_type = st.selectbox(
+        "Choose chatbot engine:",
+        options=["document", "llamaindex"],
+        format_func=lambda x: "Document ChatBot" if x == "document" else "LlamaIndex ChatBot",
+        index=0 if st.session_state['chatbot_type'] == "document" else 1,
+        help="Document ChatBot uses traditional retrieval. LlamaIndex uses advanced indexing."
+    )
+    
+    # Show current engine status
+    current_engine = "Document ChatBot" if st.session_state['chatbot_type'] == "document" else "LlamaIndex ChatBot"
+    if chatbot_type != st.session_state['chatbot_type']:
+        st.info(f"🔄 Engine will switch from **{current_engine}** to **{'Document ChatBot' if chatbot_type == 'document' else 'LlamaIndex ChatBot'}** when you switch.")
+    else:
+        st.success(f"✅ Currently using: **{current_engine}**")
+    
+    st.markdown("---")
+    
     # User ID input
     user_id = st.text_input("User ID", value=st.session_state.get('user_id', 'default_user'))
     
-    if st.button("Switch User", key="new_bot", use_container_width=True):
-        # Update user ID and create new chatbot instance
+    if st.button("Switch User/Engine", key="new_bot", use_container_width=True):
+        # Update user ID and chatbot type, create new chatbot instance
         st.session_state['user_id'] = user_id
-        st.session_state['chatbot'] = DocumentChatBot(user_id=user_id)
+        st.session_state['chatbot_type'] = chatbot_type
+        
+        with st.spinner(f"Initializing {'LlamaIndex' if chatbot_type == 'llamaindex' else 'Document'} ChatBot..."):
+            st.session_state['chatbot'] = create_chatbot_instance(user_id, chatbot_type)
+        
         st.session_state['messages'] = []
         st.session_state['active_conv'] = None
-        st.session_state['conversations'] = fetch_user_conversations(user_id)
+        st.session_state['conversations'] = fetch_user_conversations(user_id, chatbot_type)
+        st.success(f"✅ Switched to {'LlamaIndex' if chatbot_type == 'llamaindex' else 'Document'} ChatBot!")
         st.rerun()
+    
+    # Show engine-specific information
+    st.markdown("### Engine Information")
+    if st.session_state['chatbot_type'] == "llamaindex":
+        st.info("""
+        **🦙 LlamaIndex Features:**
+        - Advanced semantic indexing
+        - Vector similarity search
+        - Built-in conversation history
+        - Automatic context management
+        """)
+    else:
+        st.info("""
+        **🤖 Document ChatBot Features:**
+        - Traditional keyword search
+        - Custom context retrieval  
+        - Manual conversation management
+        - Configurable search parameters
+        """)
     
     st.markdown("---")
     
     # Display current session info
     st.markdown("### Session Info")
+    engine_name = "LlamaIndex" if st.session_state['chatbot_type'] == "llamaindex" else "Document ChatBot"
+    st.write(f"**Engine:** {engine_name}")
+    
     if st.session_state.get('active_conv') is not None:
         active_session = st.session_state['conversations'][st.session_state['active_conv']]
         st.write(f"**Session:** {active_session['session_id'][:8]}...")
@@ -213,7 +296,10 @@ with right_col:
 
 # --- Main: Chat Window ---
 with main_col:
-    st.title("🤖 Document ChatBot")
+    # Dynamic title based on engine
+    engine_icon = "🦙" if st.session_state['chatbot_type'] == "llamaindex" else "🤖"
+    engine_name = "LlamaIndex ChatBot" if st.session_state['chatbot_type'] == "llamaindex" else "Document ChatBot"
+    st.title(f"{engine_icon} {engine_name}")
     
     chatbot = st.session_state['chatbot']
 
@@ -228,23 +314,26 @@ with main_col:
                 if role == "bot":
                     # Parse bot response for JSON content
                     parsed_response, follow_up_questions = parse_bot_response(msg)
-                    clicked_question = display_message(role, parsed_response, follow_up_questions, msg_idx=msg_idx)
+                    clicked_question = display_message(role, parsed_response, follow_up_questions, msg_idx=msg_idx, engine_type=st.session_state['chatbot_type'])
                     if clicked_question:
                         pending_question = clicked_question
                 else:
-                    display_message(role, msg)
+                    display_message(role, msg, engine_type=st.session_state['chatbot_type'])
             
             # Handle follow-up question clicks
             if pending_question:
                 st.session_state['pending_followup'] = pending_question
                 st.rerun()
         else:
-            st.markdown("""
+            engine_name = "LlamaIndex ChatBot" if st.session_state['chatbot_type'] == "llamaindex" else "Document ChatBot"
+            engine_description = "LlamaIndex for advanced semantic search" if st.session_state['chatbot_type'] == "llamaindex" else "Document ChatBot for traditional retrieval"
+            st.markdown(f"""
             <div style='text-align: center; color: #666; font-style: italic; padding: 50px; 
                         border: 2px dashed #ccc; border-radius: 10px; background-color: #fafafa;'>
-                <h3> Welcome to Document ChatBot!</h3>
+                <h3>🎯 Welcome to {engine_name}!</h3>
                 <p>Start a conversation by typing your question below.</p>
                 <p>I can help you with questions about your documents.</p>
+                <p><strong>Engine:</strong> Using {engine_description}</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -261,7 +350,7 @@ with main_col:
         # Create a form for better UX
         with st.form(key='chat_form', clear_on_submit=True):
             user_input = st.text_input(
-                " Enter your question or command:", 
+                "💬 Enter your question or command:", 
                 key="user_input", 
                 placeholder="Type your message here...",
                 help="Ask questions about your documents or use the follow-up suggestions above"
@@ -280,23 +369,24 @@ with main_col:
             # Add user message to chat
             st.session_state['messages'].append(("user", user_input))
             
-            # Get conversation history and document context
-            with st.spinner(" Processing your question..."):
-                relevant_history = chatbot._get_conversation_history(user_input)
-                context_string = chatbot._get_document_context(user_input)
-                history_text = f"\n\nRelevant Context:\n{relevant_history}" if relevant_history else ""
-                system_message = chatbot._build_system_message(context_string, history_text)
-                response = chatbot._generate_response(user_input, system_message)
+            # Get response using unified interface
+            with st.spinner(f"🔍 Processing with {engine_name}..."):
+                response = query_chatbot(chatbot, user_input, st.session_state['chatbot_type'])
             
             # Add bot response to chat (store the raw response)
             st.session_state['messages'].append(("bot", response))
             
-            # Save conversation to database
-            chatbot._save_conversation(user_input, response)
+            # Save conversation to database (both engines support this)
+            if st.session_state['chatbot_type'] == "llamaindex":
+                # LlamaIndex handles saving internally in the query method
+                pass
+            else:
+                # DocumentChatBot needs explicit saving
+                chatbot._save_conversation(user_input, response)
             
             # Update the conversations list if this was a new conversation
             if st.session_state['active_conv'] is None:
-                st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'])
+                st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
                 # Set this as the active conversation (it should be the first one now)
                 st.session_state['active_conv'] = 0
             else:
@@ -307,7 +397,7 @@ with main_col:
             st.rerun()
             
         except Exception as e:
-            st.error(f" Error: {e}")
+            st.error(f"❌ Error: {e}")
             st.error("Please try again or check your configuration.")
     
     # Handle clear button (only if not processing a follow-up)
@@ -351,6 +441,22 @@ st.markdown("""
     .stButton[data-testid="followup"] > button:hover {
         background-color: #e6e9ef;
         border-color: #c4c8d0;
+    }
+    
+    /* Engine specific styling */
+    .llamaindex-engine {
+        border-left: 4px solid #ff6b35 !important;
+        background: linear-gradient(135deg, #fff5f0 0%, #ffe8d6 100%) !important;
+    }
+    
+    .document-engine {
+        border-left: 4px solid #4CAF50 !important;
+        background: linear-gradient(135deg, #f0fff4 0%, #e8f5e8 100%) !important;
+    }
+    
+    /* Info boxes for engines */
+    .stAlert > div {
+        border-radius: 10px;
     }
 </style>
 """, unsafe_allow_html=True)

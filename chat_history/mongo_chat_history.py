@@ -89,7 +89,7 @@ class MongoDBChatHistoryManager:
         except Exception as e:
             pass  # Silently ignore index creation errors
    
-    def _normalize_conversation(query: str, response: str) -> str:
+    def _normalize_conversation(self, query: str, response: str) -> str:
         normalized_response = re.sub(r"\[\[\d+\]\],?\s*", "", response)
         normalized_response = re.sub(r"\n\s*#{1,6}\s*([^\n]+)", r". \1:", normalized_response)
         normalized_response = re.sub(r"\n\s*-\s*\*\*([^*]+)\*\*:\s*", r". \1: ", normalized_response)
