@@ -205,29 +205,7 @@ class LlamaIndexPreprocessor:
             print(f"❌ Error processing documents: {e}")
             return False
 
-    def configure_pipeline(self, chunk_size=1500, overlap=200, enable_transformers=None) -> bool:
-        enable_transformers = enable_transformers or ['pdf', 'doc', 'ppt', 'text']
-        transformer_map = {
-            'pdf': lambda: PDFTransformer(chunk_size=chunk_size, overlap=overlap),
-            'doc': lambda: DOCTransformer(chunk_size=chunk_size, overlap=overlap),
-            'ppt': lambda: PPTTransformer(chunk_size=chunk_size, overlap=overlap),
-            'text': lambda: SentenceSplitter(chunk_size=chunk_size, chunk_overlap=overlap,
-                                             paragraph_separator="\n\n", secondary_chunking_regex=r"[.!?]\s+")
-        }
-        try:
-            transformers = [transformer_map[t]() for t in enable_transformers if t in transformer_map]
-            for t in enable_transformers:
-                if t in transformer_map:
-                    print(f"✅ {t.upper()} transformer enabled")
-
-            transformers.append(Settings.embed_model)
-            self.ingestion_pipeline = IngestionPipeline(transformations=transformers, vector_store=self.vector_store)
-            print(f"✅ Pipeline reconfigured (chunk_size={chunk_size}, overlap={overlap})")
-            return True
-        except Exception as e:
-            print(f"❌ Error configuring pipeline: {e}")
-            return False
-
+    
     # ---------- Accessors ----------
     def get_index(self): return self.index
     def get_vector_store(self): return self.vector_store

@@ -1,6 +1,6 @@
 import streamlit as st
 from vanilla_engine import DocumentChatBot
-from llamaindex_engine import LlamaIndexEngine
+from llamaindex.llamaindex_engine import LlamaIndexEngine
 import json
 import re
 
