@@ -1,294 +1,300 @@
-import chromadb
 import os
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 
-from llama_index.core import Settings, VectorStoreIndex, StorageContext
+from llama_index.core import Settings
 from llama_index.llms.openai import OpenAI
-from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
+# Import the preprocessor
+from llamaindex_preprocessing import LlamaIndexPreprocessor, Config
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-class LlamaIndexManager:
-    def __init__(self, persist_directory="./chroma_db", collection_name="document_collection", 
+class LlamaIndexEngine:
+    """Handles querying and chat functionality for LlamaIndex"""
+
+    def __init__(self, persist_directory="./chroma_db", collection_name="multimodal_downloaded_data_with_embedding", 
                  user_id="default_user", project_id="1"):
-        load_dotenv()
+        self.config = Config()
+        self.user_id, self.project_id = user_id, project_id
         
-        # User and session management
-        self.user_id = user_id
-        self.project_id = project_id
+        # Initialize preprocessor
+        self.preprocessor = LlamaIndexPreprocessor(persist_directory, collection_name)
         
-        # Initialize chat history manager
+        # Initialize query components
+        self._setup_llm()
+        self._setup_chat_history()
+        
+        self.query_engine = None
+        self._initialize_query_engine()
+
+    def _log_setup(self, component: str, success: bool, error: Exception = None):
+        """Unified logging for component setup"""
+        if success:
+            print(f"✅ {component} configured")
+        else:
+            print(f"⚠️  {component} setup failed: {error}")
+
+    def _setup_llm(self):
+        """Setup Azure OpenAI LLM with error handling"""
+        if not self.config.azure_available:
+            self._log_setup("Azure OpenAI", False, "Credentials not found")
+            Settings.llm = self.azure_client = None
+            return
+
+        try:
+            self.azure_client = AzureOpenAI(
+                azure_endpoint=self.config.azure_endpoint,
+                api_key=self.config.api_key,
+                api_version=self.config.api_version
+            )
+            Settings.llm = OpenAI(
+                model=self.config.deployment_name,
+                openai_client=self.azure_client,
+                temperature=0.1, max_tokens=4000
+            )
+            self._log_setup("Azure OpenAI", True)
+        except Exception as e:
+            self._log_setup("Azure OpenAI", False, e)
+            Settings.llm = self.azure_client = None
+
+    def _setup_chat_history(self):
+        """Setup MongoDB chat history with error handling"""
         try:
             from chat_history.mongo_chat_history import MongoDBChatHistoryManager
-            self.chat_manager = MongoDBChatHistoryManager(
-                db_name="chat_history_db", 
-                collection_name="conversations"
-            )
+            self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
             self.session_id = self._initialize_session()
-            print(f"✅ MongoDB chat history initialized (session: {self.session_id})")
+            self._log_setup("MongoDB chat history", True)
         except Exception as e:
-            print(f"⚠️  Chat history disabled: {e}")
-            self.chat_manager = None
-            self.session_id = None
+            self._log_setup("Chat history", False, e)
+            self.chat_manager = self.session_id = None
+
+    def _initialize_query_engine(self):
+        """Initialize query engine if index is available"""
+        # Try to build/load index first
+        if not self.preprocessor.index:
+            self.preprocessor.build_index()
         
-        # Setup embeddings - use local HuggingFace embeddings by default
-        embed_model = HuggingFaceEmbedding(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            max_length=512,
-            device="cpu",
-            trust_remote_code=False,
-            normalize=True
-        )
-        Settings.embed_model = embed_model
-    
-        
-        # Setup LLM - try Azure OpenAI, fall back to None if not available
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
-        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
-        
-        print(f"🔧 Azure Config: endpoint={azure_endpoint}, deployment={deployment_name}, api_version={api_version}")
-        print(f"🔧 API Key present: {bool(api_key)}")
-        
-        if api_key and azure_endpoint:
-            try:
-                # Create Azure OpenAI client manually (like your working example)
-                self.azure_client = AzureOpenAI(
-                    azure_endpoint=azure_endpoint,
-                    api_key=api_key,
-                    api_version=api_version
-                )
-                
-                # Pass the Azure client to LlamaIndex
-                Settings.llm = OpenAI(
-                    model=deployment_name,  # Azure deployment name
-                    openai_client=self.azure_client,  # Use our configured Azure client
-                    temperature=0.1,
-                    max_tokens=4000
-                )
-                print(f"✅ Azure OpenAI LLM configured: {deployment_name}")
-            except Exception as e:
-                print(f"⚠️  Could not configure Azure OpenAI LLM: {e}")
-                print(f"⚠️  Error details: {type(e).__name__}: {str(e)}")
-                Settings.llm = None
-                self.azure_client = None
+        if self.preprocessor.index:
+            self.query_engine = self.preprocessor.index.as_query_engine(similarity_top_k=3, llm=Settings.llm)
+            print("✅ Query engine initialized")
         else:
-            print("⚠️  Azure OpenAI credentials not found. LLM features disabled.")
-            Settings.llm = None
-            self.azure_client = None
+            print("⚠️  No index available for query engine")
 
-        self.persist_directory = persist_directory
-        self.collection_name = collection_name
+    def build_index(self, doc_directory=None) -> bool:
+        """Build index using preprocessor and initialize query engine"""
+        result = self.preprocessor.build_index(doc_directory)
+        if result:
+            self._initialize_query_engine()
+        return result
 
-        self.chroma_client = chromadb.PersistentClient(path=self.persist_directory)
-        self.chroma_collection = self.chroma_client.get_or_create_collection(self.collection_name)
-
-        self.vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
-        self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-
-        self.index = None
-        self.query_engine = None
-
-    def build_index(self, docs=None):
-        """Build vector index and query engine, or load existing index"""
-        
-        # Try to load existing index first
+    def has_existing_index(self) -> bool:
+        """Check if ChromaDB collection has any documents"""
         try:
-            self.index = VectorStoreIndex.from_vector_store(
-                self.vector_store,
-                storage_context=self.storage_context
-            )
-            print(f"✅ Loaded existing index from ChromaDB (collection: {self.collection_name})")
-            
-        except Exception as e:
-            # If loading fails, create new index from documents
-            if docs is None:
-                raise ValueError("No existing index found and no documents provided to create new index")
-            
-            print(f"📝 No existing index found, creating new index from {len(docs)} documents...")
-            self.index = VectorStoreIndex.from_documents(docs, storage_context=self.storage_context)
-            print(f"✅ Created new index and saved to ChromaDB")
-        
-        # Create query engine
-        self.query_engine = self.index.as_query_engine(
-            similarity_top_k=3,
-            llm=Settings.llm
-        )
-  
-    def query(self, question: str, use_chat_history: bool = True, save_conversation: bool = True):
+            return self.chroma_collection.count() > 0
+        except Exception:
+            return False
+
+    # Querying methods
+
+    def query(self, question: str, use_chat_history: bool = True, save_conversation: bool = True) -> str:
         """Enhanced query with chat history and system prompts"""
-        if not self.query_engine:
-            try:
-                self.build_index()  # Ensure index is built
-            except ValueError as ve:
-                print(f"❌ Error: {ve}")
-        
+        if not self.query_engine and not self.build_index():
+            return "❌ No index available and unable to create one. Please ensure documents are available."
+
         print(f"\n🔍 Processing: '{question}'")
-        
+
         try:
-            # Get conversation history if enabled
-            relevant_history = None
-            if use_chat_history:
-                relevant_history = self._get_conversation_history(question)
+            # Get conversation history and document context
+            relevant_history = self._get_conversation_history(question) if use_chat_history else None
+            context_string = self._get_document_context(question)
             
-            # Get retriever to access document context
-            retriever = self.index.as_retriever(similarity_top_k=10)
-            nodes = retriever.retrieve(question)
+            # Build system message and generate response
+            history_text = f"\n\nRelevant History:\n{relevant_history}" if relevant_history else ""
+            system_message = self._build_system_message(context_string, history_text)
+            response = self._generate_response(question, system_message)
             
-            print(f"📚 Found {len(nodes)} relevant document chunks")
-            
-            # Prepare context for LLM
-            history_text = ""
-            if relevant_history:
-                history_text = f"\n\nRelevant History:\n{relevant_history}"
-            
-            # Build system message with retrieved context
-            system_message = self._build_system_message(nodes, history_text)
-            
-            # Use the stored azure_client instead of trying to access it from Settings.llm
-            if not self.azure_client:
-                raise ValueError("Azure OpenAI client not available")
-            
-            print("🤖 Generating response with Azure OpenAI...")
-            completion = self.azure_client.chat.completions.create(
-                model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": question}
-                ],
-                temperature=0.3,
-                max_tokens=4000,
-            )
-            response = completion.choices[0].message.content
-            
-            self._save_conversation(question, response)
+            if save_conversation:
+                self._save_conversation(question, response)
             
             print("✅ Response generated successfully")
             return response
-            
         except Exception as e:
             print(f"❌ Error during query: {e}")
-            # Fallback to simple query
-            response = self.query_engine.query(question)
-            return str(response)
+            # Fallback to simple LlamaIndex query
+            try:
+                response = self.query_engine.query(question)
+                return str(response)
+            except Exception as fallback_error:
+                return f"❌ Error: {fallback_error}"
 
-    def has_existing_index(self):
-        """Check if ChromaDB collection has any documents"""
+    def _get_document_context(self, query: str) -> str:
+        """Retrieve and process document context using LlamaIndex retriever"""
+        print(f"🔍 Retrieving documents...")
+        retriever = self.preprocessor.index.as_retriever(similarity_top_k=10)
+        nodes = retriever.retrieve(query)
+        context_chunks = [node.text for node in nodes[:10]]
+        print(f"📚 Using {len(context_chunks)} document chunks")
+        return "\n".join(context_chunks)
+
+    def _improve_query(self, query: str, is_interactive: bool = False) -> str:
+        """Improve query for better retrieval"""
+        if not self.azure_client:
+            return query
+
+        prompt = (f"Rewrite the following question to be as clear, specific, and context-rich as possible for a document retrieval system. "
+                 f"Do not answer the question, just rewrite it.\nOriginal: {query}\nImproved:")
+
         try:
-            count = self.chroma_collection.count()
-            return count > 0
-        except Exception:
-            return False
-    
-    def _initialize_session(self):
+            completion = self.azure_client.chat.completions.create(
+                model=self.config.deployment_name,
+                messages=[
+                    {"role": "system", "content": "You are an assistant that is a part of a RAG system. Your task is to rewrite vague or ambiguous questions to be more specific and helpful for document search."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3, max_tokens=60,
+            )
+            improved = completion.choices[0].message.content.strip()
+            if improved and improved.lower() != query.lower():
+                print(f"💡 Improved query: {improved}")
+                if is_interactive:
+                    print("Would you like to use this improved query? (yes/no)")
+                    user_choice = input().strip().lower()
+                    return improved if user_choice in ['yes', 'y'] else query
+                return improved
+        except Exception as e:
+            print(f"⚠️  Query improvement failed: {e}")
+        return query
+
+    def _generate_response(self, query: str, system_message: str) -> str:
+        """Generate response using Azure OpenAI"""
+        if not self.azure_client:
+            raise ValueError("Azure OpenAI client not available")
+
+        print("🤖 Generating response with Azure OpenAI...")
+        improved_query = self._improve_query(query)
+        
+        completion = self.azure_client.chat.completions.create(
+            model=self.config.deployment_name,
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": improved_query}
+            ],
+            temperature=0.6, max_tokens=4000,
+        )
+        return completion.choices[0].message.content
+
+    def _build_system_message(self, context_string: str, history_text: str = "") -> str:
+        """Build the system message for the LLM"""
+        return f"""You are a knowledgeable AI assistant that can answer questions about literature, science, and various other topics. 
+        When answering:
+        - Use the provided context to give accurate, detailed responses. Be specific and informative in your responses
+        - If previous conversation history is available, reference it when relevant
+        - Use ONLY the provided context and conversation history to answer questions. If you don't know the answer state that.
+        - Generate follow-up question suggestions after each response to keep the conversation going
+        - Your responses should look like this:
+        ```json
+        {{
+            "response": "Your answer here",
+            "follow_up_questions": [
+                "Follow-up question 1",
+                "Follow-up question 2",
+                "Follow-up question 3"
+            ]
+        }}
+        ```
+        - You MUST ALWAYS stick to the provided guideline and format for your responses
+        - If the question is vague or ambiguous, ask for clarification
+        
+        Context:
+        {context_string}
+        
+        {history_text}
+        
+        If by any chance you find conflicting information in the context, use the most recent information to answer the question."""
+
+    def _initialize_session(self) -> Optional[str]:
         """Initialize or get existing session for chat history"""
         if not self.chat_manager:
             return None
-            
         sessions = self.chat_manager.get_sessions(self.user_id, self.project_id)
         if sessions:
-            return sessions[-1]["session_id"]  # Use the most recent session
-        else:
-            session = self.chat_manager.create_session(self.user_id, self.project_id)
-            return session["session_id"]
-    
-    def _get_conversation_history(self, query: str):
+            return sessions[-1]["session_id"]
+        session = self.chat_manager.create_session(self.user_id, self.project_id)
+        return session["session_id"]
+
+    def _get_conversation_history(self, query: str) -> Optional[str]:
         """Get relevant conversation history"""
         if not self.chat_manager or not self.session_id:
             return None
-            
+
         print("🔍 Searching for relevant conversation history...")
         relevant_history = self.chat_manager.find_most_relevant_conversation(
             query, session_id=self.session_id, n_results=5, max_tokens=500
         )
-        
+
         if relevant_history:
-            if isinstance(relevant_history, list):
-                conversation_count = len(relevant_history)
-            else:
-                conversation_count = relevant_history.count("Question:") or 1
-            
+            conversation_count = len(relevant_history) if isinstance(relevant_history, list) else relevant_history.count("Question:") or 1
             print(f"📊 Retrieved {conversation_count} relevant conversation(s)")
             return relevant_history
         else:
             print("📊 No relevant conversation history found")
             return None
-    
-    def _build_system_message(self, context_nodes: list, history_text: str = "") -> str:
-        """Build the system message for the LLM"""
-        
-        # Extract content from nodes
-        context_string = "\n".join([node.text for node in context_nodes])
-        
-        return f"""You are a knowledgeable AI assistant that can answer questions about literature, science, and various other topics. 
-                When answering:
-                - Use the provided context to give accurate, detailed responses. Be specific and informative in your responses
-                - If previous conversation history is available, reference it when relevant
-                - Use ONLY the provided context and conversation history to answer questions. If you don't know the answer state that.
-                - Generate follow-up question suggestions after each response to keep the conversation going
-                - Your responses should look like this:
-                ```json
-                {{
-                    "response": "Your answer here",
-                    "follow_up_questions": [
-                        "Follow-up question 1",
-                        "Follow-up question 2",
-                        "Follow-up question 3"
-                    ]
-                }}
-                ```
-                - You MUST ALWAYS stick to the provided guideline and format for your responses
-                - If the question is vague or ambiguous, ask for clarification
-                
-                Context:
-                {context_string}
-                
-                {history_text}
-                
-                If by any chance you find conflicting information in the context, use the most recent information to answer the question."""
 
     def _save_conversation(self, query: str, response: str):
         """Save conversation to chat history"""
         if self.chat_manager and self.session_id:
             print("💾 Saving conversation...")
-            self.chat_manager.add_conversation(
-                query=query, response=response, session_id=self.session_id
-            )
+            self.chat_manager.add_conversation(query=query, response=response, session_id=self.session_id)
 
-    def get_sessions(self):
+    def get_sessions(self) -> List[Dict[str, Any]]:
         """Return all sessions for the current user as a list of dicts"""
         if not self.chat_manager:
             return []
-            
         try:
-            sessions = self.chat_manager.get_sessions(self.user_id, self.project_id)
-            return sessions if sessions else []
+            return self.chat_manager.get_sessions(self.user_id, self.project_id) or []
         except Exception as e:
             print(f"Error retrieving sessions: {e}")
             return []
-    
-    def simple_query(self, question: str):
+
+    def simple_query(self, question: str) -> str:
         """Simple query without chat history for quick testing"""
         if not self.query_engine:
             raise ValueError("Query engine not initialized. Call build_index first.")
-        
         response = self.query_engine.query(question)
         return str(response)
 
+    def chat_loop(self):
+        """Main chat interaction loop"""
+        print(f"LlamaIndex Document Chat Bot initialized!")
+        print(f"Storage: ChromaDB + MongoDB")
+        print(f"Collection: {self.collection_name}")
+        print("Commands: 'quit'")
+        print("-" * 60)
+
+        try:
+            while True:
+                query = input("\nEnter your question (or command): ").strip()
+                if not query:
+                    continue
+                if query.lower() in ["quit", "exit"]:
+                    break
+                try:
+                    response = self.query(query)
+                    print("\nResponse:")
+                    print(response)
+                    print("-" * 60)
+                except Exception as e:
+                    print(f"Error: {e}")
+                    print("Please try again.")
+        except (KeyboardInterrupt, EOFError):
+            print("\n\nSession ended")
+
 if __name__ == "__main__":
-    
-    manager = LlamaIndexManager(
-        persist_directory="./chroma_db",  # Use your main ChromaDB
-        collection_name="my_documents"   # Use existing collection
+    manager = LlamaIndexEngine(
+        persist_directory="./chroma_db",
+        collection_name="multimodal_downloaded_data_with_embedding",
+        user_id="default_user"
     )
-    manager.build_index()  # Load existing index or create new one
-    
-    while True:
-        question = input("Ask a question: ")
-        if question.lower() in ["exit", "quit"]:
-            break
-        response = manager.query(question)
-        print("\nResponse:")
-        print(response)
+    manager.chat_loop()

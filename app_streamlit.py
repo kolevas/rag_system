@@ -1,6 +1,6 @@
 import streamlit as st
 from vanilla_engine import DocumentChatBot
-from llamaindex_engine import LlamaIndexManager
+from llamaindex_engine import LlamaIndexEngine
 import json
 import re
 
@@ -70,7 +70,7 @@ def fetch_user_conversations(user_id, chatbot_type="document"):
     """Fetch all sessions for the user and their messages"""
     try:
         if chatbot_type == "llamaindex":
-            bot = LlamaIndexManager(user_id=user_id)
+            bot = LlamaIndexEngine(user_id=user_id)
             sessions = bot.get_sessions()
         else:
             bot = DocumentChatBot(user_id=user_id)
@@ -123,7 +123,7 @@ def fetch_user_conversations(user_id, chatbot_type="document"):
 def create_chatbot_instance(user_id, chatbot_type="document"):
     """Create appropriate chatbot instance based on type"""
     if chatbot_type == "llamaindex":
-        bot = LlamaIndexManager(user_id=user_id)
+        bot = LlamaIndexEngine(user_id=user_id)
         # Build index if needed
         if not bot.has_existing_index():
             print("⚠️ No existing LlamaIndex found. You may need to build the index first.")

@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 from llama_index.core.schema import Document
+from llama_index.core.schema import TransformComponent
+from llama_index.core.bridge.pydantic import Field
+from typing import Any, List, Sequence
 import sys
 
 # Add the parent directory to the path to import preprocessing functions
@@ -72,3 +75,14 @@ class DOCTransformer:
                 processed_docs.append(doc)
         
         return processed_docs
+
+
+# LlamaIndex-compatible transformer wrapper
+class LlamaIndexDOCTransformer(TransformComponent):
+    """LlamaIndex-compatible DOC transformer wrapper"""
+    chunk_size: int = Field(default=1500)
+    overlap: int = Field(default=200)
+    
+    def __call__(self, nodes: Sequence[Document], **kwargs: Any) -> List[Document]:
+        transformer = DOCTransformer(self.chunk_size, self.overlap)
+        return transformer(nodes)
