@@ -1,35 +1,25 @@
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Any
 import json
+from agents.billing_agent import BillingAgent
+from agents.cli_agent import CLIAgent
+from agents.knowlege_pipeline.fact_checking_agent import FactCheckAgent
+from agents.knowlege_pipeline.research_agent import ResearchAgent
+from agents.knowlege_pipeline.export_agent import ExportPDFAgent
+from rag_system.llamaindex.llamaindex_engine import LlamaIndexEngine
+from openai import AzureOpenAI
+import os
+from dotenv import load_dotenv
 
-# Use safer imports with error handling
-try:
-    from agents.billing_agent import BillingAgent
-except ImportError as e:
-    print(f"⚠️  Could not import BillingAgent: {e}")
-    BillingAgent = None
+load_dotenv()
 
-try:
-    from agents.cli_agent import CLIAgent
-except ImportError as e:
-    print(f"⚠️  Could not import CLIAgent: {e}")
-    CLIAgent = None
+# create a single shared LLM client for use in the pipeline
+LLM_CLIENT = AzureOpenAI(
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION")
+)
 
-try:
-    from agents.knowlege_pipeline.fact_checking_agent import FactCheckAgent
-    from agents.knowlege_pipeline.research_agent import ResearchAgent
-    from agents.knowlege_pipeline.export_agent import ExportPDFAgent
-except ImportError as e:
-    print(f"⚠️  Could not import knowledge pipeline agents: {e}")
-    FactCheckAgent = ResearchAgent = ExportPDFAgent = None
-
-try:
-    from rag_system.llamaindex.llamaindex_engine import LlamaIndexEngine
-except ImportError as e:
-    print(f"⚠️  Could not import LlamaIndexEngine: {e}")
-    LlamaIndexEngine = None
-
-# --- State schema ---
 class QueryState(TypedDict):
     query: str
     classification: str
@@ -38,6 +28,7 @@ class QueryState(TypedDict):
     research_data: Any
     fact_check_results: Any
     user_choice: str
+    llm: Any
 
 # --- Classifier ---
 class QueryClassifier:
@@ -188,6 +179,49 @@ def export_agent(state: QueryState) -> QueryState:
             state["result"] = {"content": state["result"], "export_error": str(e)}
     return state
 
+def response_agent(state: QueryState) -> QueryState:
+    """
+    Final response agent to format the output.
+    This can be customized to return JSON, text, or any other format.
+    """
+    client = state["llm"]
+    system_prompt = f"""You are a knowledgeable AI assistant that can restructure and summarize structured data from AI agents.
+        You will receive the user query and data from either a research agent, a billing agent or a cli agent.
+        Your task is to format that input into the following JSON structure:
+        ```json
+        {{
+            "response": "Explain what the input is about in an understanding and concise manner",
+            "follow_up_questions": [
+                "Follow-up question 1",
+                "Follow-up question 2",
+                "Follow-up question 3"
+            ]
+        }}
+        ```
+        When answering:
+        - Give accurate, detailed responses. Be specific and informative in your responses. Write the response as if you were explaining the content of the given input.
+        - Generate follow-up question suggestions after each response to keep the conversation going
+        - Stick to the provided guideline and format
+        - ALWAYS include the cli command in the response if it was generated
+        - ALWAYS include the billing estimate in the response if it was generated
+        - ALWAYS state that a research was conducted and the results were fact-checked when applicable
+        - use bullet points for structured data, if applicable
+        - NEVER mention the input or the agents since they are a part of the process and should not be included in the final output
+
+        """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"User input: {state['query']} Agent: {state['classification']} result: {state['result']}"}
+        ],
+        max_tokens=1500,
+        temperature=0.3
+    )
+    state["result"] = response.choices[0].message.content.strip()
+    return state
+
 # --- Routing ---
 def route_after_classification(state: QueryState) -> str:
     return state["classification"]
@@ -210,6 +244,8 @@ graph.add_node("user_choice", user_choice_node)
 graph.add_node("research", research_agent)
 graph.add_node("fact_checker", fact_checker)
 graph.add_node("export", export_agent)
+# add the response/structurize node and attach it to appropriate branches
+graph.add_node("response", response_agent)
 
 graph.set_entry_point("classify")
 
@@ -233,14 +269,19 @@ graph.add_conditional_edges("user_choice", route_after_user_choice, {
 })
 
 # terminal paths
-graph.add_edge("billing", END)
-graph.add_edge("cli", END)
+# route billing and cli to the response node, then to END (leave rag as direct END)
+graph.add_edge("billing", "response")
+graph.add_edge("cli", "response")
 graph.add_edge("rag", END)
 
 # research flow
 graph.add_edge("research", "fact_checker")
 graph.add_edge("fact_checker", "export")
-graph.add_edge("export", END)
+# after export, route to response node to structurize/exported data
+graph.add_edge("export", "response")
+
+# final structurize node leads to END
+graph.add_edge("response", END)
 
 app = graph.compile()
 
@@ -253,7 +294,8 @@ def process_query(user_query: str) -> dict:
         "relevance": "",
         "research_data": None,
         "fact_check_results": None,
-        "user_choice": ""
+        "user_choice": "",
+        "llm": LLM_CLIENT
     }
     try:
         return app.invoke(state)["result"]

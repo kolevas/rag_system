@@ -1,8 +1,16 @@
+# Ensure project root is on sys.path so package imports like `rag_system.*` resolve
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import streamlit as st
-from vanilla_engine import DocumentChatBot
-from llamaindex.llamaindex_engine import LlamaIndexEngine
+from rag_system.vanilla_engine import DocumentChatBot
+from rag_system.llamaindex.llamaindex_engine import LlamaIndexEngine
 import json
 import re
+
+# import the multi-agent pipeline after path adjustments
+from query_classifier import process_query
 
 st.set_page_config(page_title="Document ChatBot", layout="wide")
 
@@ -130,6 +138,9 @@ def create_chatbot_instance(user_id, chatbot_type="document"):
         else:
             bot.build_index()
         return bot
+    elif chatbot_type == "multiagent":
+        # Multiagent pipeline is a stateless function; no long-lived chatbot instance required
+        return None
     else:
         return DocumentChatBot(user_id=user_id)
 
@@ -138,6 +149,14 @@ def query_chatbot(chatbot, user_input, chatbot_type="document"):
     if chatbot_type == "llamaindex":
         # LlamaIndex interface
         return chatbot.query(user_input)
+    elif chatbot_type == "multiagent":
+        # Use the multi-agent pipeline implemented in query_classifier.process_query
+        result = process_query(user_input)
+        # process_query returns structured dict (or error); convert to pretty JSON for display
+        try:
+            return json.dumps(result, indent=2)
+        except Exception:
+            return str(result)
     else:
         # DocumentChatBot interface
         relevant_history = chatbot._get_conversation_history(user_input)
@@ -222,16 +241,16 @@ with right_col:
     st.markdown("### Chatbot Engine")
     chatbot_type = st.selectbox(
         "Choose chatbot engine:",
-        options=["document", "llamaindex"],
-        format_func=lambda x: "Document ChatBot" if x == "document" else "LlamaIndex ChatBot",
-        index=0 if st.session_state['chatbot_type'] == "document" else 1,
-        help="Document ChatBot uses traditional retrieval. LlamaIndex uses advanced indexing."
+        options=["document", "llamaindex", "multiagent"],
+        format_func=lambda x: "Document ChatBot" if x == "document" else ("LlamaIndex ChatBot" if x == "llamaindex" else "MultiAgent System"),
+        index=0 if st.session_state['chatbot_type'] == "document" else (1 if st.session_state['chatbot_type'] == "llamaindex" else 2),
+        help="Document ChatBot uses traditional retrieval. LlamaIndex uses advanced indexing. MultiAgent runs the multi-agent pipeline."
     )
-    
+
     # Show current engine status
-    current_engine = "Document ChatBot" if st.session_state['chatbot_type'] == "document" else "LlamaIndex ChatBot"
+    current_engine = "Document ChatBot" if st.session_state['chatbot_type'] == "document" else ("LlamaIndex ChatBot" if st.session_state['chatbot_type'] == "llamaindex" else "MultiAgent System")
     if chatbot_type != st.session_state['chatbot_type']:
-        st.info(f"🔄 Engine will switch from **{current_engine}** to **{'Document ChatBot' if chatbot_type == 'document' else 'LlamaIndex ChatBot'}** when you switch.")
+        st.info(f"🔄 Engine will switch from **{current_engine}** to **{'Document ChatBot' if chatbot_type == 'document' else ('LlamaIndex ChatBot' if chatbot_type == 'llamaindex' else 'MultiAgent System') }** when you switch.")
     else:
         st.success(f"✅ Currently using: **{current_engine}**")
     
@@ -244,14 +263,18 @@ with right_col:
         # Update user ID and chatbot type, create new chatbot instance
         st.session_state['user_id'] = user_id
         st.session_state['chatbot_type'] = chatbot_type
-        
-        with st.spinner(f"Initializing {'LlamaIndex' if chatbot_type == 'llamaindex' else 'Document'} ChatBot..."):
+
+        with st.spinner(f"Initializing {'LlamaIndex' if chatbot_type == 'llamaindex' else ('MultiAgent' if chatbot_type == 'multiagent' else 'Document')} ChatBot..."):
             st.session_state['chatbot'] = create_chatbot_instance(user_id, chatbot_type)
-        
+
         st.session_state['messages'] = []
         st.session_state['active_conv'] = None
-        st.session_state['conversations'] = fetch_user_conversations(user_id, chatbot_type)
-        st.success(f"✅ Switched to {'LlamaIndex' if chatbot_type == 'llamaindex' else 'Document'} ChatBot!")
+        # For multiagent we don't have persistent conversations in DB, so only fetch when not multiagent
+        if chatbot_type != 'multiagent':
+            st.session_state['conversations'] = fetch_user_conversations(user_id, chatbot_type)
+        else:
+            st.session_state['conversations'] = []
+        st.success(f"✅ Switched to {'LlamaIndex' if chatbot_type == 'llamaindex' else ('MultiAgent' if chatbot_type == 'multiagent' else 'Document')} ChatBot!")
         st.rerun()
     
     # Show engine-specific information
@@ -263,6 +286,14 @@ with right_col:
         - Vector similarity search
         - Built-in conversation history
         - Automatic context management
+        """)
+    elif st.session_state['chatbot_type'] == "multiagent":
+        st.info("""
+        **🤖 MultiAgent System Features:**
+        - Multiple AI agents for diverse tasks
+        - Dynamic task allocation
+        - Context-aware agent switching
+        - Integrated learning from interactions
         """)
     else:
         st.info("""

@@ -38,7 +38,7 @@ class FactCheckAgent:
                         ["claim 1", "claim 2", "claim 3"]"""}, 
                     {"role": "user", "content": f"Please summarize this research:\n{content}"}
                 ],
-                max_tokens=100,
+                max_tokens=60,
                 temperature=0.3,
                 timeout=30
             )

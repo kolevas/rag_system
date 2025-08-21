@@ -6,7 +6,9 @@ import uuid
 from typing import List, Dict, Optional
 import os
 from dotenv import load_dotenv
-from ..token_utils import count_tokens
+from rag_system.token_utils import count_tokens
+import re
+import numpy as np
 
 # Load environment variables
 load_dotenv()

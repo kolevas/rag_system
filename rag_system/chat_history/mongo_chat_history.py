@@ -5,7 +5,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from ..token_utils import count_tokens
+from rag_system.token_utils import count_tokens
 from openai import AzureOpenAI
 import re
 import numpy as np

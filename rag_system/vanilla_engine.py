@@ -1,6 +1,6 @@
 from openai import AzureOpenAI
-# Fix import path
-from .preprocessing.document_reader import DocumentReader
+# Use package-qualified imports so the module can be imported from the app root
+from rag_system.preprocessing.document_reader import DocumentReader
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -10,7 +10,7 @@ class DocumentChatBot:
         self.user_id = user_id
         self.project_id = "1"
         self.reader = DocumentReader(chroma_db_path="./chroma_db")
-        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
         self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
         self.session_id = self._initialize_session()
         self.client = AzureOpenAI(

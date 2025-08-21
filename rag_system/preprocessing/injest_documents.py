@@ -1,6 +1,6 @@
 # ingest_documents.py
 
-from document_reader import DocumentReader
+from rag_system.preprocessing.document_reader import DocumentReader
 from pathlib import Path
 import time
 
@@ -30,17 +30,3 @@ if __name__ == "__main__":
             print(actual_processing_time)
         else:
             print(f"No documents generated for file: {file_path.name}.")
-    
-
-            # reader.add_documents_to_collection([doc], collection_name="multimodal_downloaded_data_with_embedding")
-    # doc = reader.read_single_document("/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal/iris.csv")
-    # if doc:
-    #     reader.add_documents_to_collection([doc], collection_name="multimodal_downloaded_data_with_embedding")
-
-    # Option 2: Process an entire directory
-    # reader.process_directory(
-    #     directory_path="/Users/snezhanakoleva/praksa/chroma_db_project/test_data_multimodal",
-    #     collection_name="multimodal_downloaded_data_with_embedding",
-    #     recursive=True,
-    #     chunk_size=500
-    # )

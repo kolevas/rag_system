@@ -7,7 +7,7 @@ from llama_index.core import Settings
 from llama_index.llms.openai import OpenAI
 
 # Import the preprocessor with relative import
-from .llamaindex_preprocessing import LlamaIndexPreprocessor, Config
+from rag_system.llamaindex.llamaindex_preprocessing import LlamaIndexPreprocessor, Config
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -63,7 +63,7 @@ class LlamaIndexEngine:
         """Setup chat history with graceful fallback"""
         try:
             # Use relative import since we're in the rag_system package
-            from ..chat_history.mongo_chat_history import MongoDBChatHistoryManager
+            from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
             self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
             self.session_id = self._initialize_session()
             self._log_setup("MongoDB chat history", True)

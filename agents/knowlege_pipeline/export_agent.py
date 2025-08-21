@@ -8,7 +8,26 @@ class ExportPDFAgent(Agent):
                  backstory="You turn research findings into structured, professional-looking papers for decision-makers."):
         super().__init__(name=name, role=role, goal=goal, backstory=backstory)
 
+    def clean_text_for_pdf(self, text):
+        """Clean text of problematic Unicode characters for PDF export"""
+        # Replace smart quotes and other Unicode characters
+        replacements = {
+            '\u2019': "'",  # Right single quotation mark
+            '\u2018': "'",  # Left single quotation mark
+            '\u201c': '"',  # Left double quotation mark
+            '\u201d': '"',  # Right double quotation mark
+            '\u2013': '-',  # En dash
+            '\u2014': '--', # Em dash
+        }
+        
+        for unicode_char, replacement in replacements.items():
+            text = text.replace(unicode_char, replacement)
+        
+        return text
+
     def export_pdf(self, research_data, fact_check_results, filename="research_report.pdf"):
+        research_data = [self.clean_text_for_pdf(item) for item in research_data]
+        fact_check_results = [self.clean_text_for_pdf(item) for item in fact_check_results]
         # If input is a stringified JSON, parse it
         if isinstance(fact_check_results, str):
             try:
