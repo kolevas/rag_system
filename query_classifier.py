@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, Any
+from typing import TypedDict, Any, Optional
 import json
 from agents.billing_agent import BillingAgent
 from agents.cli_agent import CLIAgent
@@ -29,6 +29,7 @@ class QueryState(TypedDict):
     fact_check_results: Any
     user_choice: str
     llm: Any
+    non_interactive: bool
 
 # --- Classifier ---
 class QueryClassifier:
@@ -127,11 +128,32 @@ def calculate_relevance(result: Any) -> str:
         return "low"
 
 def user_choice_node(state: QueryState) -> QueryState:
+    # Non-interactive (web/UI) mode: do NOT block
+    if state.get("non_interactive"):
+        if not state.get("user_choice") or state.get("user_choice") == "":
+            state["result"] = {
+                "status": "need_user_choice",
+                "options": ["rag", "research"],
+                "message": "Low relevance documents. Choose 'rag' to answer with current retrieval or 'research' for deeper research + fact check + PDF export.",
+                "query": state["query"]
+            }
+            state["user_choice"] = "pending"
+            return state
+        # validate provided choice
+        if state["user_choice"] not in ["rag", "research", "pending"]:
+            state["user_choice"] = "research"
+        return state
+    
+    # CLI / terminal mode (blocking)
     print("⚠️ Retrieved docs have low relevance.")
     choice = input("Do you want to continue with [rag] results or run [research]? ").strip().lower()
     if choice not in ["rag", "research"]:
         choice = "research"
     state["user_choice"] = choice
+    return state
+
+def pending_node(state: QueryState) -> QueryState:
+    """Placeholder terminal node when waiting for frontend user choice."""
     return state
 
 def research_agent(state: QueryState) -> QueryState:
@@ -169,7 +191,12 @@ def export_agent(state: QueryState) -> QueryState:
     try:
         filename = "exported_research.pdf"
         ExportPDFAgent().export_pdf(state.get("research_data", {}), state["result"], filename)
-        state["result"] = {"content": state["result"], "pdf_exported": filename}
+        state["result"] = {
+            "content": state["result"], 
+            "pdf_exported": filename,
+            "pdf_status": "Successfully exported research findings to PDF"
+        }
+        print(f"✅ PDF exported: {filename}")
     except Exception as e:
         print(f"❌ Export error: {e}")
         # Don't fail the entire pipeline if export fails
@@ -205,6 +232,7 @@ def response_agent(state: QueryState) -> QueryState:
         - ALWAYS include the cli command in the response if it was generated
         - ALWAYS include the billing estimate in the response if it was generated
         - ALWAYS state that a research was conducted and the results were fact-checked when applicable
+        - ALWAYS mention PDF export when pdf_exported field is present in the result
         - use bullet points for structured data, if applicable
         - NEVER mention the input or the agents since they are a part of the process and should not be included in the final output
 
@@ -230,7 +258,10 @@ def route_after_retrieval(state: QueryState) -> str:
     return "rag" if state["relevance"] == "high" else "user_choice"
 
 def route_after_user_choice(state: QueryState) -> str:
-    return state["user_choice"]
+    choice = state.get("user_choice", "")
+    if choice in ["rag", "research"]:
+        return choice
+    return "pending"
 
 # --- Graph ---
 graph = StateGraph(QueryState)
@@ -241,6 +272,7 @@ graph.add_node("cli", cli_agent)
 graph.add_node("retrieval", retrieval_agent)
 graph.add_node("rag", rag_agent)
 graph.add_node("user_choice", user_choice_node)
+graph.add_node("pending", pending_node)
 graph.add_node("research", research_agent)
 graph.add_node("fact_checker", fact_checker)
 graph.add_node("export", export_agent)
@@ -262,11 +294,15 @@ graph.add_conditional_edges("retrieval", route_after_retrieval, {
     "user_choice": "user_choice"
 })
 
-# user choice → rag or research
+# user choice → rag or research or pending
 graph.add_conditional_edges("user_choice", route_after_user_choice, {
     "rag": "rag",
-    "research": "research"
+    "research": "research",
+    "pending": "pending"
 })
+
+# pending is a terminal stop
+graph.add_edge("pending", END)
 
 # terminal paths
 # route billing and cli to the response node, then to END (leave rag as direct END)
@@ -285,6 +321,30 @@ graph.add_edge("response", END)
 
 app = graph.compile()
 
+# --- Non-blocking runner for UI ---
+def process_query_step(user_query: str, user_choice: Optional[str] = None) -> dict:
+    """Non-blocking version of the pipeline for web UI.
+    Call 1: process_query_step(query) -> may return {status: need_user_choice}
+    Call 2: process_query_step(query, user_choice='rag'|'research') -> final result
+    (If relevance high or classification != knowledge, returns final result in one call.)
+    """
+    state: QueryState = {
+        "query": user_query,
+        "classification": "",
+        "result": {},
+        "relevance": "",
+        "research_data": None,
+        "fact_check_results": None,
+        "user_choice": (user_choice or "").lower(),
+        "llm": LLM_CLIENT,
+        "non_interactive": True
+    }
+    try:
+        out_state = app.invoke(state)
+        return out_state["result"]
+    except Exception as e:
+        return {"error": str(e)}
+
 # --- Runner ---
 def process_query(user_query: str) -> dict:
     state: QueryState = {
@@ -295,7 +355,8 @@ def process_query(user_query: str) -> dict:
         "research_data": None,
         "fact_check_results": None,
         "user_choice": "",
-        "llm": LLM_CLIENT
+        "llm": LLM_CLIENT,
+        "non_interactive": False
     }
     try:
         return app.invoke(state)["result"]

@@ -10,13 +10,17 @@ import json
 import re
 
 # import the multi-agent pipeline after path adjustments
-from query_classifier import process_query
+from query_classifier import process_query, process_query_step
 
 st.set_page_config(page_title="Document ChatBot", layout="wide")
 
 def parse_bot_response(response_text):
     """Parse bot response and extract JSON content if present"""
     try:
+        # If it's already a dict (from multiagent), extract response and follow-up questions
+        if isinstance(response_text, dict):
+            return response_text.get('response', str(response_text)), response_text.get('follow_up_questions', [])
+        
         # Try to find JSON in the response
         json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
         if json_match:
@@ -35,7 +39,7 @@ def parse_bot_response(response_text):
         return response_text, []
     except Exception as e:
         print(f"Error parsing bot response: {e}")
-        return response_text, []
+        return str(response_text), []
 
 def display_message(role, content, follow_up_questions=None, msg_idx=None, engine_type="document"):
     """Display a chat message with proper formatting"""
@@ -72,6 +76,32 @@ def display_message(role, content, follow_up_questions=None, msg_idx=None, engin
                         # Add the follow-up question as a new user message
                         return question
             st.markdown("---")
+        
+        # Check if this message contains PDF export information and provide download
+        if isinstance(content, dict) and content.get("pdf_exported"):
+            pdf_file_path = "/Users/snezhanakoleva/praksa/app/exported_research.pdf"
+            if os.path.exists(pdf_file_path):
+                with open(pdf_file_path, "rb") as pdf_file:
+                    st.download_button(
+                        label="📥 Download Research PDF",
+                        data=pdf_file.read(),
+                        file_name="exported_research.pdf",
+                        mime="application/pdf",
+                        key=f"pdf_download_{msg_idx}" if msg_idx is not None else f"pdf_download_{len(st.session_state['messages'])}",
+                        use_container_width=True
+                    )
+        elif isinstance(content, str) and ("pdf_exported" in content or "exported_research.pdf" in content):
+            pdf_file_path = "/Users/snezhanakoleva/praksa/app/exported_research.pdf"
+            if os.path.exists(pdf_file_path):
+                with open(pdf_file_path, "rb") as pdf_file:
+                    st.download_button(
+                        label="📥 Download Research PDF",
+                        data=pdf_file.read(),
+                        file_name="exported_research.pdf",
+                        mime="application/pdf",
+                        key=f"pdf_download_str_{msg_idx}" if msg_idx is not None else f"pdf_download_str_{len(st.session_state['messages'])}",
+                        use_container_width=True
+                    )
     return None
 
 def fetch_user_conversations(user_id, chatbot_type="document"):
@@ -150,13 +180,30 @@ def query_chatbot(chatbot, user_input, chatbot_type="document"):
         # LlamaIndex interface
         return chatbot.query(user_input)
     elif chatbot_type == "multiagent":
-        # Use the multi-agent pipeline implemented in query_classifier.process_query
-        result = process_query(user_input)
-        # process_query returns structured dict (or error); convert to pretty JSON for display
-        try:
-            return json.dumps(result, indent=2)
-        except Exception:
-            return str(result)
+        # Use the non-blocking multi-agent pipeline
+        result = process_query_step(user_input)
+        # Check if we need user choice for low relevance
+        if isinstance(result, dict) and result.get("status") == "need_user_choice":
+            # Store the query and return a special marker for the UI to handle
+            return {"status": "need_user_choice", "data": result}
+        # For multiagent, result is already a structured response (JSON string or dict)
+        # Try to parse it as JSON to extract follow-up questions
+        if isinstance(result, str):
+            try:
+                # Try to parse JSON from the response
+                import re
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```', result, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group(1))
+                    return parsed  # Return the parsed dict directly
+                else:
+                    # Try to parse the entire string as JSON
+                    parsed = json.loads(result)
+                    return parsed  # Return the parsed dict directly
+            except:
+                # If parsing fails, return as string
+                pass
+        return result
     else:
         # DocumentChatBot interface
         relevant_history = chatbot._get_conversation_history(user_input)
@@ -180,6 +227,10 @@ if 'conversations' not in st.session_state:
     st.session_state['conversations'] = []
 if 'pending_followup' not in st.session_state:
     st.session_state['pending_followup'] = None
+if 'pending_user_choice' not in st.session_state:
+    st.session_state['pending_user_choice'] = None
+if 'current_query' not in st.session_state:
+    st.session_state['current_query'] = None
 
 # Create columns
 left_col, main_col, right_col = st.columns([2, 5, 2], gap="large")
@@ -371,70 +422,171 @@ with main_col:
     # Input section at the bottom
     st.markdown("---")
     
-    # Handle pending follow-up question
-    if st.session_state.get('pending_followup'):
-        user_input = st.session_state['pending_followup']
-        st.session_state['pending_followup'] = None
-        send_button = True
-        clear_button = False
+    # Handle pending user choice for multiagent low relevance
+    if st.session_state.get('pending_user_choice') and st.session_state['chatbot_type'] == "multiagent":
+        choice_data = st.session_state['pending_user_choice']
+        st.warning("⚠️ " + choice_data.get("message", "Low relevance documents found."))
+        
+        st.write("**Choose how to proceed:**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📄 Use RAG Results", use_container_width=True, type="secondary"):
+                # Process with RAG choice
+                with st.spinner("🔍 Processing with RAG..."):
+                    final_response = process_query_step(st.session_state['current_query'], user_choice="rag")
+                    # Parse JSON response for proper formatting
+                    if isinstance(final_response, str):
+                        try:
+                            import re
+                            json_match = re.search(r'```json\s*(\{.*?\})\s*```', final_response, re.DOTALL)
+                            if json_match:
+                                final_response = json.loads(json_match.group(1))
+                            else:
+                                final_response = json.loads(final_response)
+                        except:
+                            pass  # Keep as string if parsing fails
+                
+                # Add both messages to chat
+                st.session_state['messages'].append(("user", st.session_state['current_query']))
+                st.session_state['messages'].append(("bot", final_response))
+                
+                # Clear pending state
+                st.session_state['pending_user_choice'] = None
+                st.session_state['current_query'] = None
+                st.rerun()
+        
+        with col2:
+            if st.button("🔬 Run Research", use_container_width=True, type="primary"):
+                # Process with research choice
+                with st.spinner("🔍 Running research, fact-checking, and generating PDF..."):
+                    final_response = process_query_step(st.session_state['current_query'], user_choice="research")
+                    # Parse JSON response for proper formatting
+                    if isinstance(final_response, str):
+                        try:
+                            import re
+                            json_match = re.search(r'```json\s*(\{.*?\})\s*```', final_response, re.DOTALL)
+                            if json_match:
+                                final_response = json.loads(json_match.group(1))
+                            else:
+                                final_response = json.loads(final_response)
+                        except:
+                            pass  # Keep as string if parsing fails
+                
+                # Check if PDF was exported and show success message with download
+                pdf_file_path = "/Users/snezhanakoleva/praksa/app/exported_research.pdf"
+                if isinstance(final_response, dict) and final_response.get("pdf_exported"):
+                    st.success(f"✅ Research completed! PDF exported as: {final_response['pdf_exported']}")
+                    # Add download button
+                    if os.path.exists(pdf_file_path):
+                        with open(pdf_file_path, "rb") as pdf_file:
+                            st.download_button(
+                                label="📥 Download Research PDF",
+                                data=pdf_file.read(),
+                                file_name="exported_research.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                elif "exported_research.pdf" in str(final_response):
+                    st.success("✅ Research completed! PDF exported as: exported_research.pdf")
+                    # Add download button
+                    if os.path.exists(pdf_file_path):
+                        with open(pdf_file_path, "rb") as pdf_file:
+                            st.download_button(
+                                label="📥 Download Research PDF",
+                                data=pdf_file.read(),
+                                file_name="exported_research.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                
+                # Add both messages to chat
+                st.session_state['messages'].append(("user", st.session_state['current_query']))
+                st.session_state['messages'].append(("bot", final_response))
+                
+                # Clear pending state
+                st.session_state['pending_user_choice'] = None
+                st.session_state['current_query'] = None
+                st.rerun()
+        
+        st.markdown("---")
+        st.info("Please make a choice above to continue.")
     else:
-        # Create a form for better UX
-        with st.form(key='chat_form', clear_on_submit=True):
-            user_input = st.text_input(
-                "💬 Enter your question or command:", 
-                key="user_input", 
-                placeholder="Type your message here...",
-                help="Ask questions about your documents or use the follow-up suggestions above"
-            )
-            col1, col2, col3 = st.columns([2, 2, 4])
-            
-            with col1:
-                send_button = st.form_submit_button("📤 Send", use_container_width=True, type="primary")
-            
-            with col2:
-                clear_button = st.form_submit_button("🗑️ Clear", use_container_width=True, type="secondary")
+        # Normal input flow when not waiting for user choice
+        # Handle pending follow-up question
+        if st.session_state.get('pending_followup'):
+            user_input = st.session_state['pending_followup']
+            st.session_state['pending_followup'] = None
+            send_button = True
+            clear_button = False
+        else:
+            # Create a form for better UX
+            with st.form(key='chat_form', clear_on_submit=True):
+                user_input = st.text_input(
+                    "💬 Enter your question or command:", 
+                    key="user_input", 
+                    placeholder="Type your message here...",
+                    help="Ask questions about your documents or use the follow-up suggestions above"
+                )
+                col1, col2, col3 = st.columns([2, 2, 4])
+                
+                with col1:
+                    send_button = st.form_submit_button("📤 Send", use_container_width=True, type="primary")
+                
+                with col2:
+                    clear_button = st.form_submit_button("🗑️ Clear", use_container_width=True, type="secondary")
 
-    # Handle form submissions
-    if send_button and user_input and user_input.strip():
-        try:
-            # Add user message to chat
-            st.session_state['messages'].append(("user", user_input))
-            
-            # Get response using unified interface
-            with st.spinner(f"🔍 Processing with {engine_name}..."):
-                response = query_chatbot(chatbot, user_input, st.session_state['chatbot_type'])
-            
-            # Add bot response to chat (store the raw response)
-            st.session_state['messages'].append(("bot", response))
-            
-            # Save conversation to database (both engines support this)
-            if st.session_state['chatbot_type'] == "llamaindex":
-                # LlamaIndex handles saving internally in the query method
-                pass
-            else:
-                # DocumentChatBot needs explicit saving
-                chatbot._save_conversation(user_input, response)
-            
-            # Update the conversations list if this was a new conversation
-            if st.session_state['active_conv'] is None:
-                st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
-                # Set this as the active conversation (it should be the first one now)
-                st.session_state['active_conv'] = 0
-            else:
-                # Update the existing conversation in the list
-                st.session_state['conversations'][st.session_state['active_conv']]['messages'] = st.session_state['messages'].copy()
-            
-            # Rerun to update the display
+        # Handle form submissions
+        if send_button and user_input and user_input.strip():
+            try:
+                # Add user message to chat
+                st.session_state['messages'].append(("user", user_input))
+                
+                # Get response using unified interface
+                with st.spinner(f"🔍 Processing with {engine_name}..."):
+                    response = query_chatbot(chatbot, user_input, st.session_state['chatbot_type'])
+                
+                # Check if multiagent needs user choice for low relevance
+                if (st.session_state['chatbot_type'] == "multiagent" and 
+                    isinstance(response, dict) and response.get("status") == "need_user_choice"):
+                    # Store the pending state
+                    st.session_state['pending_user_choice'] = response["data"]
+                    st.session_state['current_query'] = user_input
+                    # Remove the user message we just added since we'll re-add it after choice
+                    st.session_state['messages'].pop()
+                    st.rerun()
+                else:
+                    # Add bot response to chat (store the raw response)
+                    st.session_state['messages'].append(("bot", response))
+                    
+                    # Save conversation to database (both engines support this)
+                    if st.session_state['chatbot_type'] == "llamaindex":
+                        # LlamaIndex handles saving internally in the query method
+                        pass
+                    elif st.session_state['chatbot_type'] != "multiagent":
+                        # DocumentChatBot needs explicit saving (multiagent doesn't have persistent chat)
+                        chatbot._save_conversation(user_input, response)
+                    
+                    # Update the conversations list if this was a new conversation
+                    if st.session_state['active_conv'] is None and st.session_state['chatbot_type'] != "multiagent":
+                        st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
+                        # Set this as the active conversation (it should be the first one now)
+                        st.session_state['active_conv'] = 0
+                    elif st.session_state['chatbot_type'] != "multiagent":
+                        # Update the existing conversation in the list
+                        st.session_state['conversations'][st.session_state['active_conv']]['messages'] = st.session_state['messages'].copy()
+                    
+                    # Rerun to update the display
+                    st.rerun()
+                
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+                st.error("Please try again or check your configuration.")
+        
+        # Handle clear button (only if not processing a follow-up)
+        if not st.session_state.get('pending_followup') and 'clear_button' in locals() and clear_button:
+            st.session_state['messages'] = []
             st.rerun()
-            
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
-            st.error("Please try again or check your configuration.")
-    
-    # Handle clear button (only if not processing a follow-up)
-    if not st.session_state.get('pending_followup') and 'clear_button' in locals() and clear_button:
-        st.session_state['messages'] = []
-        st.rerun()
 
 # Add some custom CSS for better styling
 st.markdown("""
