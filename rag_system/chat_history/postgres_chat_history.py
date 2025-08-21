@@ -6,7 +6,7 @@ import uuid
 from typing import List, Dict, Optional
 import os
 from dotenv import load_dotenv
-from token_utils import count_tokens
+from ..token_utils import count_tokens
 
 # Load environment variables
 load_dotenv()

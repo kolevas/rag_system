@@ -1,5 +1,6 @@
 from openai import AzureOpenAI
-from preprocessing.document_reader import DocumentReader
+# Fix import path
+from .preprocessing.document_reader import DocumentReader
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 

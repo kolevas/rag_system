@@ -2,12 +2,12 @@ import os
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from openai import AzureOpenAI
-
+import time
 from llama_index.core import Settings
 from llama_index.llms.openai import OpenAI
 
-# Import the preprocessor
-from llamaindex_preprocessing import LlamaIndexPreprocessor, Config
+# Import the preprocessor with relative import
+from .llamaindex_preprocessing import LlamaIndexPreprocessor, Config
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -60,15 +60,22 @@ class LlamaIndexEngine:
             Settings.llm = self.azure_client = None
 
     def _setup_chat_history(self):
-        """Setup MongoDB chat history with error handling"""
+        """Setup chat history with graceful fallback"""
         try:
-            from chat_history.mongo_chat_history import MongoDBChatHistoryManager
+            # Use relative import since we're in the rag_system package
+            from ..chat_history.mongo_chat_history import MongoDBChatHistoryManager
             self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
             self.session_id = self._initialize_session()
             self._log_setup("MongoDB chat history", True)
+        except ImportError as e:
+            print(f"⚠️  MongoDB chat history not available: {e}, using in-memory fallback")
+            self.chat_manager = None
+            self.session_id = None
+            self.chat_history = []  # Simple in-memory storage
         except Exception as e:
             self._log_setup("Chat history", False, e)
             self.chat_manager = self.session_id = None
+            self.chat_history = []  # Fallback to in-memory
 
     def _initialize_query_engine(self):
         """Initialize query engine if index is available"""
@@ -97,8 +104,9 @@ class LlamaIndexEngine:
             return False
 
     # Querying methods
-
+    
     def query(self, question: str, use_chat_history: bool = True, save_conversation: bool = True) -> str:
+        start_time = time.time()
         """Enhanced query with chat history and system prompts"""
         if not self.query_engine and not self.build_index():
             return "❌ No index available and unable to create one. Please ensure documents are available."
@@ -108,8 +116,10 @@ class LlamaIndexEngine:
         try:
             # Get conversation history and document context
             relevant_history = self._get_conversation_history(question) if use_chat_history else None
-            context_string = self._get_document_context(question)
-            
+            nodes = self.get_document_context(question) if self.preprocessor.index else []
+            #if the relevance is low call agents to do research
+            context_chunks = [node.text for node in nodes[:10]]
+            context_string = "\n".join(context_chunks) if context_chunks else "No relevant documents found."
             # Build system message and generate response
             history_text = f"\n\nRelevant History:\n{relevant_history}" if relevant_history else ""
             system_message = self._build_system_message(context_string, history_text)
@@ -119,6 +129,7 @@ class LlamaIndexEngine:
                 self._save_conversation(question, response)
             
             print("✅ Response generated successfully")
+            print(f"Response time: {time.time() - start_time:.2f} seconds")
             return response
         except Exception as e:
             print(f"❌ Error during query: {e}")
@@ -129,14 +140,12 @@ class LlamaIndexEngine:
             except Exception as fallback_error:
                 return f"❌ Error: {fallback_error}"
 
-    def _get_document_context(self, query: str) -> str:
+    def get_document_context(self, query: str) -> str:
         """Retrieve and process document context using LlamaIndex retriever"""
         print(f"🔍 Retrieving documents...")
         retriever = self.preprocessor.index.as_retriever(similarity_top_k=10)
         nodes = retriever.retrieve(query)
-        context_chunks = [node.text for node in nodes[:10]]
-        print(f"📚 Using {len(context_chunks)} document chunks")
-        return "\n".join(context_chunks)
+        return nodes
 
     def _improve_query(self, query: str, is_interactive: bool = False) -> str:
         """Improve query for better retrieval"""
@@ -226,27 +235,42 @@ class LlamaIndexEngine:
 
     def _get_conversation_history(self, query: str) -> Optional[str]:
         """Get relevant conversation history"""
-        if not self.chat_manager or not self.session_id:
-            return None
-
-        print("🔍 Searching for relevant conversation history...")
-        relevant_history = self.chat_manager.find_most_relevant_conversation(
-            query, session_id=self.session_id, n_results=5, max_tokens=500
-        )
-
-        if relevant_history:
-            conversation_count = len(relevant_history) if isinstance(relevant_history, list) else relevant_history.count("Question:") or 1
-            print(f"📊 Retrieved {conversation_count} relevant conversation(s)")
-            return relevant_history
-        else:
-            print("📊 No relevant conversation history found")
-            return None
+        if self.chat_manager and self.session_id:
+            print("🔍 Searching for relevant conversation history...")
+            try:
+                relevant_history = self.chat_manager.find_most_relevant_conversation(
+                    query, session_id=self.session_id, n_results=5, max_tokens=500
+                )
+                if relevant_history:
+                    conversation_count = len(relevant_history) if isinstance(relevant_history, list) else relevant_history.count("Question:") or 1
+                    print(f"📊 Retrieved {conversation_count} relevant conversation(s)")
+                    return relevant_history
+            except Exception as e:
+                print(f"⚠️  Error retrieving chat history: {e}")
+        
+        # Fallback to in-memory chat history
+        if hasattr(self, 'chat_history') and self.chat_history:
+            recent_history = self.chat_history[-3:]  # Get last 3 conversations
+            return "\n".join([f"Q: {item['question']}\nA: {item['answer']}" for item in recent_history])
+        
+        print("📊 No conversation history available")
+        return None
 
     def _save_conversation(self, query: str, response: str):
         """Save conversation to chat history"""
         if self.chat_manager and self.session_id:
-            print("💾 Saving conversation...")
-            self.chat_manager.add_conversation(query=query, response=response, session_id=self.session_id)
+            try:
+                print("💾 Saving conversation...")
+                self.chat_manager.add_conversation(query=query, response=response, session_id=self.session_id)
+            except Exception as e:
+                print(f"⚠️  Error saving to MongoDB: {e}")
+        
+        # Always save to in-memory backup
+        if hasattr(self, 'chat_history'):
+            self.chat_history.append({"question": query, "answer": response})
+            # Keep only last 10 conversations
+            if len(self.chat_history) > 10:
+                self.chat_history = self.chat_history[-10:]
 
     def get_sessions(self) -> List[Dict[str, Any]]:
         """Return all sessions for the current user as a list of dicts"""
@@ -275,16 +299,19 @@ class LlamaIndexEngine:
 
         try:
             while True:
+                
                 query = input("\nEnter your question (or command): ").strip()
                 if not query:
                     continue
                 if query.lower() in ["quit", "exit"]:
                     break
                 try:
+                    start_time = time.time()
                     response = self.query(query)
                     print("\nResponse:")
                     print(response)
                     print("-" * 60)
+                    print(f"Response time: {time.time() - start_time:.2f} seconds")
                 except Exception as e:
                     print(f"Error: {e}")
                     print("Please try again.")

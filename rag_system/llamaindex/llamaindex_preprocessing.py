@@ -15,9 +15,9 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 
 # Add preprocessing path
 sys.path.append('./preprocessing')
-from preprocessing.document_transformers.pdf_transformer import LlamaIndexPDFTransformer as PDFTransformer
-from preprocessing.document_transformers.doc_transformer import LlamaIndexDOCTransformer as DOCTransformer
-from preprocessing.document_transformers.ppt_transformer import LlamaIndexPPTTransformer as PPTTransformer
+from rag_system.preprocessing.document_transformers.pdf_transformer import LlamaIndexPDFTransformer as PDFTransformer
+from rag_system.preprocessing.document_transformers.doc_transformer import LlamaIndexDOCTransformer as DOCTransformer
+from rag_system.preprocessing.document_transformers.ppt_transformer import LlamaIndexPPTTransformer as PPTTransformer
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
