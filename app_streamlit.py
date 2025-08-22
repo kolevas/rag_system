@@ -8,30 +8,116 @@ from rag_system.vanilla_engine import DocumentChatBot
 from rag_system.llamaindex.llamaindex_engine import LlamaIndexEngine
 import json
 import re
+from typing import Optional
+from functools import lru_cache
+import time
 
 # import the multi-agent pipeline after path adjustments
-from query_classifier import process_query, process_query_step
+from lang_graph import process_query, process_query_step
 
 st.set_page_config(page_title="Document ChatBot", layout="wide")
+
+def render_pdf_download(pdf_path: str, msg_idx: Optional[int] = None):
+    """Helper function to render PDF download button"""
+    if not pdf_path:
+        return
+    try:
+        if os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    label="📄 Download PDF",
+                    data=f,
+                    file_name=os.path.basename(pdf_path),
+                    mime="application/pdf",
+                    key=f"pdf_download_{msg_idx}_{hash(pdf_path)}" if msg_idx is not None else f"pdf_download_{hash(pdf_path)}",
+                    use_container_width=True
+                )
+    except Exception as e:
+        st.warning(f"PDF not available: {e}")
+
+def extract_pdf_path(content) -> Optional[str]:
+    """Extract PDF path from message content"""
+    if isinstance(content, dict):
+        return content.get("pdf_exported")
+    elif isinstance(content, str):
+        # Try to parse JSON string
+        try:
+            obj = json.loads(content)
+            return obj.get("pdf_exported")
+        except Exception:
+            return None
+    return None
+
+# Safely bind a conversation session_id to the active chatbot (handles None)
+def set_active_session_id(session_id: str) -> None:
+    st.session_state["active_session_id"] = session_id
+    bot = st.session_state.get("chatbot")
+    if bot is not None:
+        # Some chatbot implementations may not expose session_id or may not be initialized yet
+        try:
+            setattr(bot, "session_id", session_id)
+        except Exception:
+            # Defer binding until the bot gets created
+            st.session_state["defer_bind_session_id"] = True
+
+# Ensure chatbot is created for the current mode before use
+def ensure_chatbot_initialized() -> None:
+    mode = st.session_state.get("chatbot_type")  # e.g., "document", "multiagent", "llamaindex"
+    bot = st.session_state.get("chatbot")
+    # If bot is None or wrong mode, re-create it using your existing factory/initializer
+    if bot is None or getattr(bot, "mode", None) != mode:
+        # Create chatbot using existing function
+        st.session_state["chatbot"] = create_chatbot_instance(st.session_state.get('user_id', 'default_user'), mode)
+
+    # If we have a pending session_id to bind, attach it now
+    if st.session_state.get("defer_bind_session_id"):
+        sid = st.session_state.get("active_session_id")
+        if sid and st.session_state["chatbot"] is not None:
+            try:
+                st.session_state["chatbot"].session_id = sid
+            except Exception:
+                pass
+        st.session_state["defer_bind_session_id"] = False
+
+@st.cache_resource(show_spinner=False)
+def get_llamaindex_engine_cached(user_id: str):
+    """Cache the LlamaIndex engine instance to avoid re-initialization"""
+    from rag_system.llamaindex.llamaindex_engine import LlamaIndexEngine
+    engine = LlamaIndexEngine(
+        persist_directory="./rag_system/chroma_db",
+        collection_name="multimodal_downloaded_data_with_embedding",
+        user_id=user_id
+    )
+    # Build index if needed
+    if not engine.has_existing_index():
+        print("⚠️ No existing LlamaIndex found. You may need to build the index first.")
+    else:
+        engine.build_index()
+    return engine
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_chat_history_cached(user_id: str, chatbot_type: str):
+    """Cache chat history loading to speed up LlamaIndex mode"""
+    return fetch_user_conversations(user_id, chatbot_type)
 
 def parse_bot_response(response_text):
     """Parse bot response and extract JSON content if present"""
     try:
-        # If it's already a dict (from multiagent), extract response and follow-up questions
+        # If it's already a dict (from multiagent), return it as-is to preserve all metadata
         if isinstance(response_text, dict):
-            return response_text.get('response', str(response_text)), response_text.get('follow_up_questions', [])
+            return response_text, response_text.get('follow_up_questions', [])
         
         # Try to find JSON in the response
         json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
             parsed = json.loads(json_str)
-            return parsed.get('response', response_text), parsed.get('follow_up_questions', [])
+            return parsed, parsed.get('follow_up_questions', [])
         
         # Try to parse the entire response as JSON
         try:
             parsed = json.loads(response_text)
-            return parsed.get('response', response_text), parsed.get('follow_up_questions', [])
+            return parsed, parsed.get('follow_up_questions', [])
         except:
             pass
         
@@ -51,12 +137,22 @@ def display_message(role, content, follow_up_questions=None, msg_idx=None, engin
         </div>
         """, unsafe_allow_html=True)
     else:
+        # Extract display text from content
+        display_text = content
+        if isinstance(content, dict):
+            display_text = content.get('response', str(content))
+        
         st.markdown(f"""
         <div style='text-align: left; color: #333; margin: 10px 0; padding: 15px; 
                     background-color: #f9f9f9; border-radius: 15px; border-left: 4px solid #4CAF50;'>
-            <b>Bot:</b> {content}
+            <b>Bot:</b> {display_text}
         </div>
         """, unsafe_allow_html=True)
+        
+        # Check for PDF download after displaying the message
+        pdf_path = extract_pdf_path(content)
+        if pdf_path:
+            render_pdf_download(pdf_path, msg_idx)
         
         # Display follow-up questions if available
         if follow_up_questions and len(follow_up_questions) > 0:
@@ -76,39 +172,14 @@ def display_message(role, content, follow_up_questions=None, msg_idx=None, engin
                         # Add the follow-up question as a new user message
                         return question
             st.markdown("---")
-        
-        # Check if this message contains PDF export information and provide download
-        if isinstance(content, dict) and content.get("pdf_exported"):
-            pdf_file_path = "/Users/snezhanakoleva/praksa/app/exported_research.pdf"
-            if os.path.exists(pdf_file_path):
-                with open(pdf_file_path, "rb") as pdf_file:
-                    st.download_button(
-                        label="📥 Download Research PDF",
-                        data=pdf_file.read(),
-                        file_name="exported_research.pdf",
-                        mime="application/pdf",
-                        key=f"pdf_download_{msg_idx}" if msg_idx is not None else f"pdf_download_{len(st.session_state['messages'])}",
-                        use_container_width=True
-                    )
-        elif isinstance(content, str) and ("pdf_exported" in content or "exported_research.pdf" in content):
-            pdf_file_path = "/Users/snezhanakoleva/praksa/app/exported_research.pdf"
-            if os.path.exists(pdf_file_path):
-                with open(pdf_file_path, "rb") as pdf_file:
-                    st.download_button(
-                        label="📥 Download Research PDF",
-                        data=pdf_file.read(),
-                        file_name="exported_research.pdf",
-                        mime="application/pdf",
-                        key=f"pdf_download_str_{msg_idx}" if msg_idx is not None else f"pdf_download_str_{len(st.session_state['messages'])}",
-                        use_container_width=True
-                    )
     return None
 
 def fetch_user_conversations(user_id, chatbot_type="document"):
     """Fetch all sessions for the user and their messages"""
     try:
         if chatbot_type == "llamaindex":
-            bot = LlamaIndexEngine(user_id=user_id)
+            # Use cached engine for better performance
+            bot = get_llamaindex_engine_cached(user_id)
             sessions = bot.get_sessions()
         else:
             bot = DocumentChatBot(user_id=user_id)
@@ -161,13 +232,8 @@ def fetch_user_conversations(user_id, chatbot_type="document"):
 def create_chatbot_instance(user_id, chatbot_type="document"):
     """Create appropriate chatbot instance based on type"""
     if chatbot_type == "llamaindex":
-        bot = LlamaIndexEngine(user_id=user_id)
-        # Build index if needed
-        if not bot.has_existing_index():
-            print("⚠️ No existing LlamaIndex found. You may need to build the index first.")
-        else:
-            bot.build_index()
-        return bot
+        # Use cached engine for better performance
+        return get_llamaindex_engine_cached(user_id)
     elif chatbot_type == "multiagent":
         # Multiagent pipeline is a stateless function; no long-lived chatbot instance required
         return None
@@ -239,8 +305,11 @@ left_col, main_col, right_col = st.columns([2, 5, 2], gap="large")
 with left_col:
     st.markdown("## Previous Conversations")
     
-    # Refresh conversations for the current user
-    st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
+    # Refresh conversations for the current user (use cached version for llamaindex)
+    if st.session_state['chatbot_type'] == "llamaindex":
+        st.session_state['conversations'] = load_chat_history_cached(st.session_state['user_id'], st.session_state['chatbot_type'])
+    else:
+        st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
     
     # Display message if no conversations found
     if not st.session_state['conversations']:
@@ -252,14 +321,19 @@ with left_col:
         is_active = st.session_state.get('active_conv') == idx
         button_label = f"📝 {conv['title']}" if not is_active else f"📖 {conv['title']}"
         
-        if st.button(button_label, key=f"conv_{idx}", use_container_width=True):
+        # Disable button while loading to prevent double-clicks
+        clicked_key = f"conv_{idx}"
+        if st.button(button_label, key=clicked_key, use_container_width=True, disabled=st.session_state.get("loading_chat", False)):
+            st.session_state["loading_chat"] = True
             # Load the selected conversation
             st.session_state['messages'] = conv['messages'].copy()
             st.session_state['active_conv'] = idx
             
-            # Update the chatbot to use the correct session
-            st.session_state['chatbot'].session_id = conv['session_id']
+            # Safely update the chatbot to use the correct session
+            set_active_session_id(conv['session_id'])
+            ensure_chatbot_initialized()
             
+            st.session_state["loading_chat"] = False
             # Force a rerun to update the display
             st.rerun()
     
@@ -267,19 +341,28 @@ with left_col:
     
     # New Conversation button
     if st.button("New Conversation", use_container_width=True, type="primary"):
-        # Create a new session in the database
-        bot = st.session_state['chatbot']
-        new_session = bot.chat_manager.create_session(st.session_state['user_id'], project_id="1")
+        # Ensure chatbot is initialized before creating session
+        ensure_chatbot_initialized()
         
-        # Update the chatbot session
-        st.session_state['chatbot'].session_id = new_session['session_id']
+        # Create a new session in the database (only for non-multiagent)
+        if st.session_state['chatbot_type'] != 'multiagent' and st.session_state['chatbot'] is not None:
+            bot = st.session_state['chatbot']
+            new_session = bot.chat_manager.create_session(st.session_state['user_id'], project_id="1")
+            
+            # Update the chatbot session safely
+            set_active_session_id(new_session['session_id'])
         
         # Clear current messages and set as new conversation
         st.session_state['messages'] = []
         st.session_state['active_conv'] = None
         
-        # Refresh conversations list
-        st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
+        # Refresh conversations list (use cached version for llamaindex)
+        if st.session_state['chatbot_type'] == "llamaindex":
+            st.session_state['conversations'] = load_chat_history_cached(st.session_state['user_id'], st.session_state['chatbot_type'])
+        elif st.session_state['chatbot_type'] != 'multiagent':
+            st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
+        else:
+            st.session_state['conversations'] = []
         
         # Force a rerun to update the display
         st.rerun()
@@ -322,7 +405,10 @@ with right_col:
         st.session_state['active_conv'] = None
         # For multiagent we don't have persistent conversations in DB, so only fetch when not multiagent
         if chatbot_type != 'multiagent':
-            st.session_state['conversations'] = fetch_user_conversations(user_id, chatbot_type)
+            if chatbot_type == "llamaindex":
+                st.session_state['conversations'] = load_chat_history_cached(user_id, chatbot_type)
+            else:
+                st.session_state['conversations'] = fetch_user_conversations(user_id, chatbot_type)
         else:
             st.session_state['conversations'] = []
         st.success(f"✅ Switched to {'LlamaIndex' if chatbot_type == 'llamaindex' else ('MultiAgent' if chatbot_type == 'multiagent' else 'Document')} ChatBot!")
@@ -569,7 +655,10 @@ with main_col:
                     
                     # Update the conversations list if this was a new conversation
                     if st.session_state['active_conv'] is None and st.session_state['chatbot_type'] != "multiagent":
-                        st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
+                        if st.session_state['chatbot_type'] == "llamaindex":
+                            st.session_state['conversations'] = load_chat_history_cached(st.session_state['user_id'], st.session_state['chatbot_type'])
+                        else:
+                            st.session_state['conversations'] = fetch_user_conversations(st.session_state['user_id'], st.session_state['chatbot_type'])
                         # Set this as the active conversation (it should be the first one now)
                         st.session_state['active_conv'] = 0
                     elif st.session_state['chatbot_type'] != "multiagent":

@@ -13,6 +13,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def _normalize_relevance_score(val) -> Optional[float]:
+    """Normalize relevance score to 0.0-1.0 range from various formats"""
+    try:
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            f = float(val)
+        else:
+            s = str(val).strip().replace("%", "")
+            if "/" in s:  # e.g., "87/100" or "0.87/1"
+                num, den = s.split("/", 1)
+                num = float(num.strip())
+                den = float(den.strip())
+                f = (num / den) if den else 0.0
+            else:
+                f = float(s)
+        if f > 1.0:
+            f = f / 100.0
+        if f < 0.0:
+            f = 0.0
+        if f > 1.0:
+            f = 1.0
+        return f
+    except Exception:
+        return None
+
 # create a single shared LLM client for use in the pipeline
 LLM_CLIENT = AzureOpenAI(
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
@@ -112,14 +138,15 @@ def rag_agent(state: QueryState) -> QueryState:
     return state
 
 def calculate_relevance(result: Any) -> str:
+    # print("RESULT: ", result)
     if not result:
         return "low"
     
     try:
         max_relevance = 0
         for node in result:
-            if hasattr(node, "relevance"):
-                max_relevance = max(max_relevance, node.relevance)
+            if hasattr(node, "score"):
+                max_relevance = max(max_relevance, node.score)
             elif hasattr(node, "score"):
                 max_relevance = max(max_relevance, node.score)
         return "high" if max_relevance > 0.5 else "low"
@@ -162,7 +189,11 @@ def research_agent(state: QueryState) -> QueryState:
         return state
     
     try:
-        state["research_data"] = ResearchAgent().research_agent(state["query"])
+        research_result = ResearchAgent().research_agent(state["query"])
+        # Ensure research_data includes the original query for PDF export
+        if isinstance(research_result, dict):
+            research_result["original_query"] = state["query"]
+        state["research_data"] = research_result
         state["result"] = state["research_data"]
     except Exception as e:
         print(f"❌ Research error: {e}")
@@ -175,8 +206,58 @@ def fact_checker(state: QueryState) -> QueryState:
         return state
     
     try:
-        data = state.get("research_data", state["result"])
-        state["fact_check_results"] = FactCheckAgent().fact_check_with_tavily_llm(data)
+        research = state.get("research_data", state["result"])
+        
+        # The FactCheckAgent expects research_data to have 'query' and 'results' keys
+        # Make sure the research data has the expected format
+        if isinstance(research, dict) and "query" in research and "results" in research:
+            # Pass research data as-is
+            fact_check_data = research
+        else:
+            # Build compatible format for FactCheckAgent
+            fact_check_data = {
+                "query": state["query"],
+                "results": research.get("results", []) if isinstance(research, dict) else [],
+                "answer": research.get("answer", "") if isinstance(research, dict) else str(research)
+            }
+
+        raw_result = FactCheckAgent().fact_check_with_tavily_llm(fact_check_data)
+
+        # Parse JSON string response if needed
+        if isinstance(raw_result, str):
+            try:
+                raw_result = json.loads(raw_result)
+            except json.JSONDecodeError:
+                raw_result = {"llm_explanation": raw_result}
+
+        # Ensure dict result and normalize
+        if not isinstance(raw_result, dict):
+            raw_result = {"llm_explanation": str(raw_result)}
+
+        if not raw_result.get("statement") or raw_result.get("statement") == "None":
+            raw_result["statement"] = state["query"]
+
+        # Normalize score from various possible keys
+        raw_score = raw_result.get("relevance_score") or raw_result.get("relevance") or raw_result.get("score")
+        norm = _normalize_relevance_score(raw_score)
+        if norm is not None:
+            raw_result["relevance_score"] = norm
+        else:
+            # Do not force 0 if missing; leave it absent to avoid showing 0.00
+            if "relevance_score" in raw_result and raw_result["relevance_score"] is None:
+                del raw_result["relevance_score"]
+
+        # Debug aid when zero score is suspicious
+        if raw_result.get("relevance_score") == 0.0:
+            try:
+                keys = list(research.keys()) if isinstance(research, dict) else str(type(research))
+                print(f"⚠️ Fact-check score is 0.0. research keys/type: {keys}, raw_score={raw_score}")
+                print(f"   Query in fact_check_data: '{fact_check_data.get('query')}'")
+                print(f"   Number of results: {len(fact_check_data.get('results', []))}")
+            except Exception:
+                pass
+
+        state["fact_check_results"] = raw_result
         state["result"] = state["fact_check_results"]
     except Exception as e:
         print(f"❌ Fact checking error: {e}")
@@ -184,13 +265,10 @@ def fact_checker(state: QueryState) -> QueryState:
     return state
 
 def export_agent(state: QueryState) -> QueryState:
-    if not ExportPDFAgent:
-        state["result"] = {"error": "ExportPDFAgent not available"}
-        return state
-    
     try:
         filename = "exported_research.pdf"
-        ExportPDFAgent().export_pdf(state.get("research_data", {}), state["result"], filename)
+        agent = ExportPDFAgent()
+        agent.export_pdf(state.get("research_data", {}), state["result"], filename)
         state["result"] = {
             "content": state["result"], 
             "pdf_exported": filename,
@@ -212,6 +290,17 @@ def response_agent(state: QueryState) -> QueryState:
     This can be customized to return JSON, text, or any other format.
     """
     client = state["llm"]
+
+    # Preserve metadata from previous step (e.g., PDF export info)
+    meta_pdf = {}
+    payload_for_llm = state["result"]
+    if isinstance(state["result"], dict):
+        if "content" in state["result"]:
+            payload_for_llm = state["result"]["content"]
+        for k in ("pdf_exported", "pdf_status"):
+            if state["result"].get(k):
+                meta_pdf[k] = state["result"][k]
+
     system_prompt = f"""You are a knowledgeable AI assistant that can restructure and summarize structured data from AI agents.
         You will receive the user query and data from either a research agent, a billing agent or a cli agent.
         Your task is to format that input into the following JSON structure:
@@ -242,12 +331,29 @@ def response_agent(state: QueryState) -> QueryState:
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"User input: {state['query']} Agent: {state['classification']} result: {state['result']}"}
+            {"role": "user", "content": f"User input: {state['query']} Agent: {state['classification']} result: {payload_for_llm}"}
         ],
         max_tokens=1500,
         temperature=0.3
     )
-    state["result"] = response.choices[0].message.content.strip()
+    raw = response.choices[0].message.content.strip()
+
+    # Try to parse model output as JSON; fallback to plain text
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, dict):
+            parsed = {"response": raw, "follow_up_questions": []}
+    except Exception:
+        parsed = {"response": raw, "follow_up_questions": []}
+
+    # Reattach metadata so UI can render a download button
+    parsed.update(meta_pdf)
+    state["result"] = parsed
     return state
 
 # --- Routing ---
@@ -365,9 +471,9 @@ def process_query(user_query: str) -> dict:
 
 if __name__ == "__main__":
     tests = [
-        "How much does it cost to run an EC2 t3.medium instance?",
-        "What command can I use to create a new S3 bucket?",
-        "What is the latest information about AWS Lambda pricing?",
+        # "How much does it cost to run an EC2 t3.medium instance?",
+        # "What command can I use to create a new S3 bucket?",
+        # "What is the latest information about AWS Lambda pricing?",
         "Research the benefits of microservices architecture"
     ]
     for q in tests:

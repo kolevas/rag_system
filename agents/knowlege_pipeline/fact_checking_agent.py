@@ -91,7 +91,7 @@ class FactCheckAgent:
         not just a short answer. Provide depth, context, and reasoning.
         Task:
         1. Decide if the statement is factually correct.
-        2. Calculate a relevance score: a number between 0.0 (completely false) and 1.0 (completely true).
+        2. Calculate a relevance score: a number between 0.00 (completely false) and 1.00 (completely true).
         3. Explain your reasoning.
 
         Return JSON ONLY in this format:
