@@ -9,6 +9,10 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, ListFlowable, ListItem, Flowable, PageBreak
 from crewai import Agent
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ExportPDFAgent(Agent):
     def __init__(self, name="ExportPDFAgent", role="PDF Report Generator",
@@ -59,7 +63,7 @@ class ExportPDFAgent(Agent):
             sections.append((current_section, '\n'.join(current_content)))
         elif current_content:  # No sections detected, treat as single content
             sections.append(("Analysis", '\n'.join(current_content)))
-        
+        logger.info(f"Split explanation into {len(sections)} logical sections.")
         return sections
 
     def _md_to_paragraphs(self, text: str, style: ParagraphStyle) -> List[Paragraph]:
@@ -155,11 +159,12 @@ class ExportPDFAgent(Agent):
         - Handles new schema with: statement, relevance_score, llm_explanation
         - Falls back to older structures if necessary
         """
-        print("-"*100)
-        print("Research data keys:", list(fact_check.keys()) if isinstance(fact_check, dict) else type(fact_check))
-        print("-"*100)
+        #print("-"*100)
+        #print("Research data keys:", list(fact_check.keys()) if isinstance(fact_check, dict) else type(fact_check))
+        #print("-"*100)
 
         # Prepare data
+        logger.info("Starting PDF export...")
         doc = SimpleDocTemplate(output_path, pagesize=A4)
         styles = getSampleStyleSheet()
         
@@ -287,6 +292,7 @@ class ExportPDFAgent(Agent):
 
         # Build PDF
         doc.build(story, onFirstPage=self._header_footer, onLaterPages=self._header_footer)
+        logger.info(f"PDF report generated: {output_path}")
         return output_path
 
 
@@ -302,6 +308,7 @@ class ScoreBar(Flowable):
         self.label = label or f"{self.score:.1f}"
 
     def draw(self):
+        logger.info("Drawing score bar. Relevance score: %s", self.score)
         c = self.canv
         x, y = 0, 0
         # border

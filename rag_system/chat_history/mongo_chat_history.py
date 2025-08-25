@@ -26,27 +26,27 @@ class MongoDBChatHistoryManager:
             "created_at": time.time(),
             "title": title or f"Session {session_id}"
         }
-        #print(f"[DEBUG] Creating session: {session}")
+        ##print(f"[DEBUG] Creating session: {session}")
         self.save_session(session)
         return session
     # --- Session Management Methods ---
     def save_session(self, session_dict):
-        #print(f"[DEBUG] Saving session to DB: {session_dict}")
+        ##print(f"[DEBUG] Saving session to DB: {session_dict}")
         self.db['sessions'].insert_one(session_dict)
 
     def get_sessions(self, user_id, project_id):
         sessions = list(self.db['sessions'].find({'user_id': user_id, 'project_id': project_id}))
-        #print(f"[DEBUG] Retrieved sessions for user_id={user_id}, project_id={project_id}: {sessions}")
+        ##print(f"[DEBUG] Retrieved sessions for user_id={user_id}, project_id={project_id}: {sessions}")
         return sessions
 
     def get_session(self, session_id, user_id, project_id):
         session = self.db['sessions'].find_one({'session_id': session_id, 'user_id': user_id, 'project_id': project_id})
-        #print(f"[DEBUG] get_session(session_id={session_id}, user_id={user_id}, project_id={project_id}) => {session}")
+        ##print(f"[DEBUG] get_session(session_id={session_id}, user_id={user_id}, project_id={project_id}) => {session}")
         return session
 
     def delete_session(self, session_id, user_id, project_id):
         result = self.db['sessions'].delete_one({'session_id': session_id, 'user_id': user_id, 'project_id': project_id})
-        #print(f"[DEBUG] delete_session(session_id={session_id}, user_id={user_id}, project_id={project_id}) => deleted_count={result.deleted_count}")
+        ##print(f"[DEBUG] delete_session(session_id={session_id}, user_id={user_id}, project_id={project_id}) => deleted_count={result.deleted_count}")
     def __init__(self, mongo_uri=None, db_name="chat_history_db", collection_name="conversations"):
         self.mongo_uri = mongo_uri or os.getenv('MONGODB_URI', 'mongodb://localhost:27017')
         self.db_name = db_name
@@ -75,7 +75,7 @@ class MongoDBChatHistoryManager:
             # Ping the database
             self.client.admin.command('ping')
         except Exception as e:
-            print(f"MongoDB connection failed: {e}")
+            #print(f"MongoDB connection failed: {e}")
             raise
     
     def _setup_collection(self):
@@ -154,10 +154,10 @@ class MongoDBChatHistoryManager:
             "summary": self._summarize_conversation(query, response) if self.openai_client else self._normalize_conversation(query, response)
         }
         
-        print(f"[DEBUG] Saving conversation with document ID: {document['_id']}")
-        print(f"[DEBUG] Session ID: {session_id}")
-        print(f"[DEBUG] Query: {query[:100]}...")
-        print(f"[DEBUG] Response: {response[:100]}...")
+        #print(f"[DEBUG] Saving conversation with document ID: {document['_id']}")
+        #print(f"[DEBUG] Session ID: {session_id}")
+        #print(f"[DEBUG] Query: {query[:100]}...")
+        #print(f"[DEBUG] Response: {response[:100]}...")
         
         try:
             result = self.collection.replace_one(
@@ -165,17 +165,13 @@ class MongoDBChatHistoryManager:
                 document,
                 upsert=True
             )
-            print(f"[DEBUG] Save result - matched: {result.matched_count}, modified: {result.modified_count}, upserted: {result.upserted_id}")
+            #print(f"[DEBUG] Save result - matched: {result.matched_count}, modified: {result.modified_count}, upserted: {result.upserted_id}")
             
             # Verify the document was saved
             saved_doc = self.collection.find_one({"_id": document["_id"]})
-            if saved_doc:
-                print(f"[DEBUG] Document successfully saved and verified")
-            else:
-                print(f"[DEBUG] ERROR: Document not found after saving!")
                 
         except Exception as e:
-            print(f"[DEBUG] Error adding conversation: {e}")
+            #print(f"[DEBUG] Error adding conversation: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -219,7 +215,7 @@ class MongoDBChatHistoryManager:
             return combined_conversations
             
         except Exception as e:
-            print(f"Error in hybrid conversation retrieval: {e}")
+            #print(f"Error in hybrid conversation retrieval: {e}")
             return []
     
     def _get_recent_conversations_for_hybrid(self, session_id: str, max_tokens: int) -> List[Dict]:
@@ -248,7 +244,7 @@ class MongoDBChatHistoryManager:
             return result
             
         except Exception as e:
-            print(f"Error getting recent conversations: {e}")
+            #print(f"Error getting recent conversations: {e}")
             return []
     
     def _get_similarity_conversations(self, current_query: str, session_id: str, max_tokens: int, exclude_conversations: List[Dict]) -> List[Dict]:
@@ -281,7 +277,7 @@ class MongoDBChatHistoryManager:
                 total_tokens += tokens
             return result
         except Exception as e:
-            print(f"Error in similarity search: {e}")
+            #print(f"Error in similarity search: {e}")
             return []
 
     def clear_history(self, session_id: str = None):
@@ -289,45 +285,42 @@ class MongoDBChatHistoryManager:
         try:
             if session_id:
                 result = self.collection.delete_many({"session_id": session_id})
-                print(f"Chat history cleared for session '{session_id}' - {result.deleted_count} documents deleted")
+                #print(f"Chat history cleared for session '{session_id}' - {result.deleted_count} documents deleted")
             else:
                 result = self.collection.delete_many({})
-                print(f"Chat history cleared for all sessions - {result.deleted_count} documents deleted")
+                #print(f"Chat history cleared for all sessions - {result.deleted_count} documents deleted")
         except Exception as e:
             print(f"Error clearing history: {e}")
  
     def get_conversation(self, session_id: str) -> List[tuple]:
         """Get all conversations for a session as a list of (role, content) tuples"""
         try:
-            print(f"[DEBUG] Fetching conversations for session_id: {session_id}")
+            #print(f"[DEBUG] Fetching conversations for session_id: {session_id}")
             
             # First, let's see what's in the database for this session
             all_docs = list(self.collection.find({"session_id": session_id}))
-            print(f"[DEBUG] Found {len(all_docs)} total documents for session {session_id}")
-            
-            for doc in all_docs:
-                print(f"[DEBUG] Document: {doc.get('_id', 'No ID')}, type: {doc.get('type', 'No type')}")
+            #print(f"[DEBUG] Found {len(all_docs)} total documents for session {session_id}")
             
             # Now get conversations specifically
             conversations = list(self.collection.find(
                 {"session_id": session_id, "type": "conversation"}
             ).sort("timestamp", 1))  # Sort by timestamp ascending (oldest first)
             
-            print(f"[DEBUG] Found {len(conversations)} conversation documents")
+            #print(f"[DEBUG] Found {len(conversations)} conversation documents")
             
             messages = []
             for i, conv in enumerate(conversations):
-                print(f"[DEBUG] Conversation {i}: query='{conv.get('query', '')[:50]}...', response='{conv.get('response', '')[:50]}...'")
+                #print(f"[DEBUG] Conversation {i}: query='{conv.get('query', '')[:50]}...', response='{conv.get('response', '')[:50]}...'")
                 # Add user message
                 messages.append(("user", conv.get("query", "")))
                 # Add bot response  
                 messages.append(("bot", conv.get("response", "")))
             
-            print(f"[DEBUG] Returning {len(messages)} messages")
+            #print(f"[DEBUG] Returning {len(messages)} messages")
             return messages
             
         except Exception as e:
-            print(f"[DEBUG] Error retrieving conversation for session {session_id}: {e}")
+            #print(f"[DEBUG] Error retrieving conversation for session {session_id}: {e}")
             import traceback
             traceback.print_exc()
             return []

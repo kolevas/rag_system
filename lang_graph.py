@@ -471,9 +471,8 @@ def process_query(user_query: str) -> dict:
 
 if __name__ == "__main__":
     tests = [
-        # "How much does it cost to run an EC2 t3.medium instance?",
-        # "What command can I use to create a new S3 bucket?",
-        # "What is the latest information about AWS Lambda pricing?",
+        "How much does it cost to run an EC2 t3.medium instance?",
+        "What command can I use to create a new S3 bucket?",
         "Research the benefits of microservices architecture"
     ]
     for q in tests:

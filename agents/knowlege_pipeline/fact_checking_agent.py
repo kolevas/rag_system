@@ -5,7 +5,10 @@ from tavily import TavilyClient
 from openai import AzureOpenAI
 from .research_agent import ResearchAgent
 from agents.knowlege_pipeline.export_agent import ExportPDFAgent
+import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class FactCheckAgent:
     def __init__(self):
@@ -44,10 +47,11 @@ class FactCheckAgent:
             )
             summary = response.choices[0].message.content.strip()
             if summary and len(summary) > 10:
+                logger.info("Content summarized successfully. Summary length: %d", len(summary))
                 return summary
             return content[:max_length] + "..."
         except Exception as e:
-            print(f"❌ Summary error: {e}")
+            #print(f"❌ Summary error: {e}")
             return content[:max_length] + "..." 
 
     def fact_check_with_tavily_llm(self, research_data: dict):
@@ -57,6 +61,7 @@ class FactCheckAgent:
         """
         all_results = research_data.get("results", [])
         tavily_results = []
+        logger.info(f"Fact-checking {len(all_results)} research results with Tavily...")
         
         for r in all_results:
             content = r.get("content", "")
@@ -67,9 +72,10 @@ class FactCheckAgent:
                     tavily_result = self.client.search(search_query)
                     tavily_results.append(tavily_result)
                 except Exception as e:
-                    print(f"❌ Tavily search error: {e}")
+                    #print(f"❌ Tavily search error: {e}")
                     continue
         # Strict LLM reasoning prompt
+        logger.info("Generating LLM prompt for fact-checking...")
         llm_prompt = f"""
         You are a strict fact-checking assistant.
 
@@ -118,5 +124,5 @@ if __name__ == "__main__":
     result = fact_checking_agent.fact_check_with_tavily_llm(research_data)
     export_agent = ExportPDFAgent()
     export_agent.export_pdf(research_data, result, filename="fact_check_report.pdf")
-    print("Fact-checking report generated successfully.")
-    print(result)
+    #print("Fact-checking report generated successfully.")
+    #print(result)

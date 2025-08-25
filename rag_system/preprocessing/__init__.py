@@ -17,11 +17,6 @@ except ImportError as e:
     print(f"⚠️  Could not import DocumentClassifier: {e}")
     DocumentClassifier = None
 
-try:
-    from .injest_documents import DocumentIngester
-except ImportError as e:
-    print(f"⚠️  Could not import DocumentIngester: {e}")
-    DocumentIngester = None
 
 __all__ = [
     'DocumentReader',

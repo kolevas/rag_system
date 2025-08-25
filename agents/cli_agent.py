@@ -1,7 +1,10 @@
 import os
 from openai import AzureOpenAI, OpenAI
 from dotenv import load_dotenv
+import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class CLIAgent:
     def __init__(self):
@@ -13,7 +16,7 @@ class CLIAgent:
         api_version="2024-02-01")
 
     def generate_cli_command(self, user_query: str) -> str:
-    
+        logger.info("Generating CLI command for user query: %s", user_query)
 
         system_prompt = """
         You are an AWS CLI command generator.
@@ -43,4 +46,4 @@ if __name__ == "__main__":
         if user_query.lower() == "exit":
             break
         command = cli_agent.generate_cli_command(user_query)
-        print(f"\nGenerated AWS CLI Command:\n{command}\n")
+        #print(f"\nGenerated AWS CLI Command:\n{command}\n")

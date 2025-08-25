@@ -4,6 +4,10 @@ import re
 import requests
 from dotenv import load_dotenv
 from openai import AzureOpenAI
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class BillingAgent:
     def __init__(self):
@@ -43,6 +47,7 @@ class BillingAgent:
             return self._fallback(service, instance_type)
 
         try:
+            logger.info("Scraping AWS pricing page: %s", url)
             headers = {"User-Agent": "Mozilla/5.0"}
             html = requests.get(url, headers=headers, timeout=10).text.lower()
 
@@ -63,18 +68,21 @@ class BillingAgent:
                 if match:
                     return float(match.group(1))
         except Exception as e:
-            print(f"Scraping failed for {service}: {e}")
+            logger.error("Scraping failed for %s: %s", service, e)
+            #print(f"Scraping failed for {service}: {e}")
 
         return self._fallback(service, instance_type)
 
     def _fallback(self, service, instance_type):
         """Fallback to dictionary if scraping fails"""
+        logger.warning("Falling back to static pricing for %s", service)
         prices = self.fallback_pricing.get(service, {})
         if instance_type and instance_type in prices:
             return prices[instance_type]
         return list(prices.values())[0] if prices else 0.05
 
     def interpret_user_request(self, query):
+        logger.info("Interpreting user request: %s", query)
         """LLM interprets AWS service + instance type"""
         system_prompt = """
             You are an AWS Pricing expert.
@@ -118,6 +126,7 @@ class BillingAgent:
             return {"service_code": "EC2", "instance_type": "t3.micro", "usage_estimate": "Default"}
 
     def estimate_cost(self, query):
+        logger.info("Estimating cost for user query: %s", query)
         """Main flow: interpret → scrape → estimate (handles multiple services)"""
         parsed = self.interpret_user_request(query)
         services = parsed["services"]
@@ -144,7 +153,7 @@ class BillingAgent:
                 "monthly_estimate_usd": round(monthly, 2),
                 "yearly_estimate_usd": round(yearly, 2)
             })
-
+            logger.info("Estimated %s (%s x%d): $%.2f/month", service, itype or "N/A", count, monthly)
         return {
             "breakdown": breakdown,
             "total_monthly_usd": round(total_monthly, 2),
@@ -156,4 +165,4 @@ class BillingAgent:
 if __name__ == "__main__":
     agent = BillingAgent()
     query = "I would like to create a k8s cluster on AWS"
-    print(json.dumps(agent.estimate_cost(query), indent=2))
+    #print(json.dumps(agent.estimate_cost(query), indent=2))

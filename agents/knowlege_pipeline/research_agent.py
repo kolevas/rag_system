@@ -6,8 +6,10 @@ from openai import AzureOpenAI
 from tavily import TavilyClient
 from typing import List, Dict, Any, Optional, TypedDict, Literal
 # --- Configuration ---
+import logging
 
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ResearchAgent:
     def __init__(self):
@@ -25,7 +27,8 @@ class ResearchAgent:
         Queries Tavily's API and returns a list of search results.
         """
         response = self.tavily_client.search(query=search_query, limit=max_results)
-        # print("Response from Tavily:", response)
+        # #print("Response from Tavily:", response)
+        logger.info("Tavily search completed.")
         return  response
 
     def stringify_tavily_response(self, response) -> str:
@@ -56,7 +59,7 @@ class ResearchAgent:
     
     # --- Function to summarize research using LLM ---
     def summarize_results(self, results, topic):
-
+        logger.info("Summarizing results for topic: %s", topic)
         combined_text = self.stringify_tavily_response(results)
         response = self.azure_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -67,17 +70,18 @@ class ResearchAgent:
             temperature=0.3
         )
         summary = response.choices[0].message.content.strip()
-        print(f"Summary for topic '{topic}':\n{summary}")
+        logger.info("Summarization completed.")
+        #print(f"Summary for topic '{topic}':\n{summary}")
         return summary     
 
     # --- Main function ---
     def research_agent(self, topic):
-        print(f"🔎 Researching: {topic}")
+        #print(f"🔎 Researching: {topic}")
         
         # Step 1: Fetch data from Tavily
         results = self.query_tavily(topic)
 
-        # print(f"Found results:", results)
+        # #print(f"Found results:", results)
 
         # Step 2: Summarize using LLM or stringify
         # summary = self.summarize_results(results, topic)
@@ -90,5 +94,5 @@ if __name__ == "__main__":
     topic = "Latest AI trends in healthcare"
     agent = ResearchAgent()
     summary = agent.research_agent(topic)
-    print("\n📝 Summary:\n")
-    print(summary)
+    #print("\n📝 Summary:\n")
+    #print(summary)
