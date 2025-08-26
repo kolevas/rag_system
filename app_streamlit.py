@@ -90,7 +90,7 @@ def get_llamaindex_engine_cached(user_id: str):
     )
     # Build index if needed
     if not engine.has_existing_index():
-        print("⚠️ No existing LlamaIndex found. You may need to build the index first.")
+        print("Building the index first.")
     else:
         engine.build_index()
     return engine

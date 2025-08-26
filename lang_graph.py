@@ -149,7 +149,8 @@ def calculate_relevance(result: Any) -> str:
                 max_relevance = max(max_relevance, node.score)
             elif hasattr(node, "score"):
                 max_relevance = max(max_relevance, node.score)
-        return "high" if max_relevance > 0.5 else "low"
+        print(f"\n\nMax relevance: {max_relevance}")
+        return "high" if max_relevance > 0.3 else "low"
     except Exception as e:
         print(f"Error calculating relevance: {e}")
         return "low"
@@ -315,8 +316,9 @@ def response_agent(state: QueryState) -> QueryState:
         }}
         ```
         When answering:
+        - If relevance exists and is low, that should be the first thing you say.
         - Give accurate, detailed responses. Be specific and informative in your responses. Write the response as if you were explaining the content of the given input.
-        - Generate follow-up question suggestions after each response to keep the conversation going
+        - Generate follow-up question suggestions based on the context after each response to keep the conversation going
         - Stick to the provided guideline and format
         - ALWAYS include the cli command in the response if it was generated
         - ALWAYS include the billing estimate in the response if it was generated

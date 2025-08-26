@@ -94,7 +94,7 @@ class DocumentChatBot:
                 - Use the provided context to give accurate, detailed responses. Be specific and informative in your responses
                 - If previous conversation history is available, reference it when relevant
                 - Use ONLY the provided context and conversation history to answer questions. If you don't know the answer state that.
-                - Generate follow-up question suggestions after each response to keep the conversation going
+                - Generate follow-up question suggestions based on the context after each response to keep the conversation going
                 - Your responses should look like this:
                 ```json
                 {{
