@@ -150,7 +150,7 @@ def calculate_relevance(result: Any) -> str:
             elif hasattr(node, "score"):
                 max_relevance = max(max_relevance, node.score)
         print(f"\n\nMax relevance: {max_relevance}")
-        return "high" if max_relevance > 0.3 else "low"
+        return "high" if max_relevance > 0.45 else "low"
     except Exception as e:
         print(f"Error calculating relevance: {e}")
         return "low"
